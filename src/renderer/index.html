@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline';" />
+    <title>Cursorkeyshare</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">
+        <span class="logo">⌘</span>
+        <div>
+          <div class="title">Cursorkeyshare</div>
+          <div class="subtitle" id="subtitle">Software KVM for Mac &amp; Windows</div>
+        </div>
+      </div>
+      <div class="status">
+        <span id="statusDot" class="dot stopped"></span>
+        <span id="statusText">Stopped</span>
+        <button id="toggleBtn" class="primary">Start sharing</button>
+      </div>
+    </header>
+
+    <main class="layout">
+      <section class="panel settings">
+        <h2>Settings</h2>
+
+        <label class="field">
+          <span>This machine's name</span>
+          <input id="name" type="text" />
+        </label>
+
+        <label class="field">
+          <span>Role</span>
+          <select id="role">
+            <option value="server">Server — shares this keyboard &amp; mouse</option>
+            <option value="client">Client — controlled by another machine</option>
+          </select>
+        </label>
+
+        <label class="field" id="serverHostField">
+          <span>Server address</span>
+          <input id="serverHost" type="text" placeholder="192.168.1.10" />
+        </label>
+
+        <label class="field">
+          <span>Group name <small>(must match on all machines)</small></span>
+          <input id="group" type="text" />
+        </label>
+
+        <label class="field">
+          <span>Passphrase <small>(encrypts all traffic)</small></span>
+          <input id="passphrase" type="password" placeholder="•••••••• (unchanged)" />
+        </label>
+
+        <div class="row">
+          <label class="field small">
+            <span>TCP port</span>
+            <input id="tcpPort" type="number" min="1" max="65535" />
+          </label>
+          <label class="field small">
+            <span>UDP port</span>
+            <input id="udpPort" type="number" min="1" max="65535" />
+          </label>
+        </div>
+
+        <label class="field check">
+          <input id="switchToClipboard" type="checkbox" />
+          <span>Share clipboard when switching machines</span>
+        </label>
+
+        <label class="field check">
+          <input id="autoConnect" type="checkbox" />
+          <span>Start sharing automatically on launch</span>
+        </label>
+
+        <label class="field">
+          <span>Edge-cross debounce (ms)</span>
+          <input id="edgeGuardMs" type="number" min="0" max="2000" />
+        </label>
+
+        <button id="saveBtn" class="ghost">Save settings</button>
+        <div id="backendInfo" class="hint"></div>
+      </section>
+
+      <section class="panel stagepanel">
+        <h2>Screen layout <small>drag screens to arrange · positions are remembered</small></h2>
+        <div id="stage" class="stage"></div>
+        <div class="legend">
+          <span><i class="swatch local"></i> this machine</span>
+          <span><i class="swatch active"></i> active (cursor here)</span>
+          <span><i class="swatch offline"></i> offline</span>
+        </div>
+      </section>
+    </main>
+
+    <footer class="logbar">
+      <div class="loghead">Activity</div>
+      <div id="log" class="log"></div>
+    </footer>
+
+    <script src="renderer.js"></script>
+  </body>
+</html>

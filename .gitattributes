@@ -1,0 +1,17 @@
+# Built application binaries are stored via Git LFS (not regular git) so they
+# don't bloat the packed history. These match anywhere in the tree; artifacts
+# live under dist/ which is gitignored, so add a specific one with `git add -f`
+# (e.g. `git add -f dist/Cursorkeyshare-0.1.0-arm64.dmg`).
+*.dmg   filter=lfs diff=lfs merge=lfs -text
+*.pkg   filter=lfs diff=lfs merge=lfs -text
+*.exe   filter=lfs diff=lfs merge=lfs -text
+*.zip   filter=lfs diff=lfs merge=lfs -text
+*.AppImage filter=lfs diff=lfs merge=lfs -text
+*.snap  filter=lfs diff=lfs merge=lfs -text
+*.deb   filter=lfs diff=lfs merge=lfs -text
+*.blockmap filter=lfs diff=lfs merge=lfs -text
+*.node  filter=lfs diff=lfs merge=lfs -text
+*.icns  filter=lfs diff=lfs merge=lfs -text
+
+# Keep shell scripts LF so they run on macOS/Linux runners.
+*.sh    text eol=lf

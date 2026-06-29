@@ -1,93 +1,219 @@
-# CursorKeySharing
+# Cursorkeyshare
 
+A software KVM — share **one keyboard and mouse across several Mac and Windows
+machines** on your local network. Move the mouse off the edge of one screen and
+it appears on the next machine; type and click on whichever machine the cursor
+is currently on. All traffic is encrypted.
 
+It uses a mix of **TCP** (reliable: key presses, clicks, control) and **UDP**
+(fast: mouse motion) so input feels as immediate as if the devices were plugged
+in directly. The screen layout is arranged in a config window by dragging, and
+your arrangement is remembered between runs.
 
-## Getting started
+> Built with Electron + native addons. Cross-platform: **macOS** and **Windows**.
 
-To make it easy for you to get started with GitLab, here's a list of recommended next steps.
+---
 
-Already a pro? Just edit this README.md and make it your own. Want to make it easy? [Use the template at the bottom](#editing-this-readme)!
-
-## Add your files
-
-- [ ] [Create](https://docs.gitlab.com/ee/user/project/repository/web_editor.html#create-a-file) or [upload](https://docs.gitlab.com/ee/user/project/repository/web_editor.html#upload-a-file) files
-- [ ] [Add files using the command line](https://docs.gitlab.com/topics/git/add_files/#add-files-to-a-git-repository) or push an existing Git repository with the following command:
+## How it works
 
 ```
-cd existing_repo
-git remote add origin https://gitlab.hiroshiaki.com:8886/hiroshi-aki/cursorkeysharing.git
-git branch -M main
-git push -uf origin main
+            ┌──────────────── SERVER (has the keyboard & mouse) ───────────────┐
+ physical   │  input backend ──► core ──► layout (virtual cursor & edges)       │
+ mouse/kbd ─┼─► capture+suppress      │            │                            │
+            │                         │            ├─ on local screen: pass     │
+            │                         │            │  through (no network)      │
+            │                         │            └─ on remote screen:         │
+            │                         ▼               translate to that machine │
+            │              NetServer (AES-256-GCM)     and send                 │
+            └──────────────┬───────────────────────────────┬───────────────────┘
+                  TCP (keys, clicks)              UDP (mouse motion)
+                           │                               │
+            ┌──────────────▼───────────────────────────────▼──────────┐
+            │  CLIENT: NetClient ──► core ──► input backend (inject)   │
+            └──────────────────────────────────────────────────────────┘
 ```
 
-## Integrate with your tools
+- **Roles.** The machine whose keyboard & mouse you want to share runs as the
+  **server**; every other machine runs as a **client**.
+- **Virtual cursor.** The server keeps one cursor in a global coordinate space
+  made of every machine's screens. Physical mouse deltas move it. The machine
+  whose rectangle currently holds the cursor is the *active* one.
+- **Edge crossing.** When the virtual cursor crosses from one machine's screen
+  rectangle into another's, control switches. Local input is suppressed and
+  forwarded to the active machine, translated into *its* coordinate system.
+- **Encryption.** Every TCP frame and UDP datagram is sealed with AES-256-GCM
+  using a key derived (scrypt) from a shared passphrase + group name. A peer
+  without the passphrase can't connect, eavesdrop, or inject input.
+- **Layout memory.** Closing the app saves each machine's position; reopening
+  restores the exact arrangement.
 
-- [ ] [Set up project integrations](https://gitlab.hiroshiaki.com:8886/hiroshi-aki/cursorkeysharing/-/settings/integrations)
+## Project layout
 
-## Collaborate with your team
+```
+native/                C++ N-API addon — true low-level capture + suppression
+  input.cc             N-API glue + threadsafe event bridge
+  input_win.cc         Windows: WH_MOUSE_LL / WH_KEYBOARD_LL + SendInput
+  input_mac.mm         macOS: CGEventTap + CGEventPost
+src/main/
+  main.js              Electron main: lifecycle, tray, IPC, screen detection
+  core.js              orchestrator: ServerCore / ClientCore state machines
+  layout.js            global coordinate space, edge crossing, transforms
+  config.js            persistence + layout memory (passphrase via safeStorage)
+  input.js             backend selector (native → JS fallback)
+  input_native.js      wraps the C++ addon
+  input_js.js          uiohook-napi capture + nut.js injection (fallback)
+  keymap.js            uiohook ⇄ canonical key codes (cross-OS)
+  keymap_os.js         Windows VK / macOS CGKeyCode ⇄ canonical
+  net/
+    crypto.js          scrypt KDF + AES-256-GCM seal/open
+    protocol.js        compact binary + JSON message codec
+    frame.js           length-prefixed TCP framing
+    server.js          NetServer (TCP + UDP, role=server)
+    client.js          NetClient (role=client)
+src/renderer/          config window (draggable layout editor)
+```
 
-- [ ] [Invite team members and collaborators](https://docs.gitlab.com/ee/user/project/members/)
-- [ ] [Create a new merge request](https://docs.gitlab.com/ee/user/project/merge_requests/creating_merge_requests.html)
-- [ ] [Automatically close issues from merge requests](https://docs.gitlab.com/ee/user/project/issues/managing_issues.html#closing-issues-automatically)
-- [ ] [Enable merge request approvals](https://docs.gitlab.com/ee/user/project/merge_requests/approvals/)
-- [ ] [Set auto-merge](https://docs.gitlab.com/user/project/merge_requests/auto_merge/)
+## Install & run
 
-## Test and Deploy
+Requires **Node 18+**. Native low-level capture is optional but recommended.
 
-Use the built-in continuous integration in GitLab.
+```bash
+npm install          # installs deps; tries to build the native addon (optional)
+npm start            # launch the app
+npm run dev          # launch with devtools
+```
 
-- [ ] [Get started with GitLab CI/CD](https://docs.gitlab.com/ee/ci/quick_start/)
-- [ ] [Analyze your code for known vulnerabilities with Static Application Security Testing (SAST)](https://docs.gitlab.com/ee/user/application_security/sast/)
-- [ ] [Deploy to Kubernetes, Amazon EC2, or Amazon ECS using Auto Deploy](https://docs.gitlab.com/ee/topics/autodevops/requirements.html)
-- [ ] [Use pull-based deployments for improved Kubernetes management](https://docs.gitlab.com/ee/user/clusters/agent/)
-- [ ] [Set up protected environments](https://docs.gitlab.com/ee/ci/environments/protected_environments.html)
+`npm install` runs a best-effort native build. If you don't have a C/C++
+toolchain it is skipped and the app falls back to the JS input backend — see
+**Input backends** below. To build/rebuild the native addon against Electron:
 
-***
+```bash
+npm run rebuild      # electron-rebuild the native addon
+```
 
-# Editing this README
+### Build tool prerequisites (only for the native addon)
 
-When you're ready to make this README your own, just edit this file and use the handy template below (or feel free to structure it however you want - this is just a starting point!). Thanks to [makeareadme.com](https://www.makeareadme.com/) for this template.
+- **Windows:** Visual Studio Build Tools (Desktop C++), Python 3.
+- **macOS:** Xcode command line tools (`xcode-select --install`).
 
-## Suggestions for a good README
+## Building the macOS installer (.dmg)
 
-Every project is different, so consider which of these sections apply to yours. The sections used in the template are suggestions for most open source projects. Also keep in mind that while a README can be too long and detailed, too long is better than too short. If you think your README is too long, consider utilizing another form of documentation rather than cutting out information.
+> A signed/notarized `.dmg` with native addons **must be built on macOS** —
+> `hdiutil`, `codesign`, `notarytool` and `lipo` are macOS-only. You cannot
+> cross-build it from Windows or Linux. Use a Mac, or the macOS CI below.
 
-## Name
-Choose a self-explaining name for your project.
+The build produces **two per-arch DMGs** (`arm64` + `x64`). Per-arch is the
+reliable path because the app bundles native `.node` modules that
+`@electron/universal` won't auto-merge. The one custom addon is itself compiled
+as a **universal** binary (`scripts/build-native-mac.sh` → `lipo`) so it works in
+both DMGs; `uiohook-napi` ships both darwin prebuilds and `libnut-darwin` is
+already universal.
 
-## Description
-Let people know what your project can do specifically. Provide context and add a link to any reference visitors might be unfamiliar with. A list of Features or a Background subsection can also be added here. If there are alternatives to your project, this is a good place to list differentiating factors.
+On a Mac:
 
-## Badges
-On some READMEs, you may see small images that convey metadata, such as whether or not all the tests are passing for the project. You can use Shields to add some to your README. Many services also have instructions for adding a badge.
+```bash
+npm ci
+bash scripts/build-mac.sh     # icon + universal addon + per-arch DMGs in dist/
+```
 
-## Visuals
-Depending on what you are making, it can be a good idea to include screenshots or even a video (you'll frequently see GIFs rather than actual videos). Tools like ttygif can help, but check out Asciinema for a more sophisticated method.
+That yields, in `dist/`:
 
-## Installation
-Within a particular ecosystem, there may be a common way of installing things, such as using Yarn, NuGet, or Homebrew. However, consider the possibility that whoever is reading your README is a novice and would like more guidance. Listing specific steps helps remove ambiguity and gets people to using your project as quickly as possible. If it only runs in a specific context like a particular programming language version or operating system or has dependencies that have to be installed manually, also add a Requirements subsection.
+```
+Cursorkeyshare-0.1.0-arm64.dmg     # Apple Silicon
+Cursorkeyshare-0.1.0-x64.dmg       # Intel
+```
+
+**Unsigned vs signed.** With no Apple credentials the script builds an *unsigned*
+DMG you can still run after clearing quarantine:
+
+```bash
+xattr -dr com.apple.quarantine /Applications/Cursorkeyshare.app   # or right-click > Open
+```
+
+For a **signed + notarized** release, export before building (or set as CI
+variables): `CSC_LINK` (base64 of a *Developer ID Application* `.p12`),
+`CSC_KEY_PASSWORD`, `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`, `APPLE_TEAM_ID`.
+Notarization runs only when both the signing cert and Team ID are present.
+
+### CI (recommended — this is the "build on a Mac" path)
+
+- **GitLab** (`.gitlab-ci.yml`): builds on a hosted Apple-silicon runner
+  (`saas-macos-medium-m1`) on a version **tag** push. Requires a Premium/Ultimate
+  namespace (macOS runners are paid, billed at 6× minutes). Set the
+  `MAC_CSC_LINK` / `MAC_CSC_KEY_PASSWORD` / `APPLE_*` CI/CD variables for signing.
+  Artifacts (the DMGs) are attached to the job.
+- **GitHub** (`.github/workflows/mac.yml`): if mirrored to GitHub, builds on
+  `macos-14` (free for public repos) on a tag push and uploads/attaches the DMGs.
+
+```bash
+git tag v0.1.0 && git push origin v0.1.0      # triggers the macOS build pipeline
+```
+
+### Publishing built apps via Git LFS
+
+`dist/` is git-ignored, and installer binaries (`*.dmg`, `*.exe`, `*.zip`, …) are
+tracked by **Git LFS** (`.gitattributes`). To publish a built app to the repo:
+
+```bash
+git lfs install
+git add -f dist/Cursorkeyshare-0.1.0-arm64.dmg
+git commit -m "release: macOS arm64 0.1.0"
+git push
+```
+
+(Prefer CI artifacts / a GitLab Release for routine distribution — committing
+large binaries grows history and LFS quota. LFS is wired up here for when you
+explicitly want the built apps in the repo.)
+
+## Permissions
+
+- **macOS:** grant the app **Accessibility** *and* **Input Monitoring** under
+  *System Settings → Privacy & Security*. Without these, capture/injection
+  silently does nothing. (When running from source, the host is `Electron`.)
+- **Windows:** to capture input from elevated apps the server must also run
+  elevated. SmartScreen/AV may flag low-level hooks the first time.
 
 ## Usage
-Use examples liberally, and show the expected output if you can. It's helpful to have inline the smallest example of usage that you can demonstrate, while providing links to more sophisticated examples if they are too long to reasonably include in the README.
 
-## Support
-Tell people where they can go to for help. It can be any combination of an issue tracker, a chat room, an email address, etc.
+1. On the machine with the keyboard & mouse, set **Role = Server**, choose a
+   **Group name** and **Passphrase**, and click **Start sharing**.
+2. On each other machine, set **Role = Client**, enter the **server's address**,
+   the **same Group name and Passphrase**, then **Start sharing**.
+3. Connected clients appear in the **Screen layout** editor. **Drag** each screen
+   to match your physical arrangement; edges snap together. Positions are saved.
+4. Move your mouse off the matching edge to jump to the next machine. Type/click
+   normally. Press **Ctrl/Cmd+Alt+Home** to yank control back to the server.
 
-## Roadmap
-If you have ideas for releases in the future, it is a good idea to list them in the README.
+## Input backends
 
-## Contributing
-State if you are open to contributions and what your requirements are for accepting them.
+| Backend | Capture | Injection | True suppression |
+| --- | --- | --- | --- |
+| **Native** (`native/*`) | low-level OS hooks | SendInput / CGEventPost | ✅ yes |
+| **JS fallback** | uiohook-napi | nut.js | ⚠️ soft (mouse parked; keys/clicks still reach local apps) |
 
-For people who want to make changes to your project, it's helpful to have some documentation on how to get started. Perhaps there is a script that they should run or some environment variables that they need to set. Make these steps explicit. These instructions could also be useful to your future self.
+The native addon is the proper KVM path: it can *swallow* local events while you
+drive a remote machine. The JS fallback always works and is ideal for the
+**client** side (which only injects). For the **server** side, build the native
+addon for a correct experience.
 
-You can also document commands to lint the code or run tests. These steps help to ensure high code quality and reduce the likelihood that the changes inadvertently break something. Having instructions for running tests is especially helpful if it requires external setup, such as starting a Selenium server for testing in a browser.
+## Security notes
 
-## Authors and acknowledgment
-Show your appreciation to those who have contributed to the project.
+- All transport is AES-256-GCM; the GCM tag authenticates every packet, so a
+  wrong-passphrase peer is rejected.
+- The passphrase is stored encrypted via the OS keychain (Electron
+  `safeStorage`). If the keychain is unavailable a documented insecure plaintext
+  fallback is used (dev only).
+- Use a strong, unique passphrase. Anyone with it on your LAN can control your
+  machines — that is the whole point of the tool, so guard it.
+
+## Roadmap / known limitations
+
+- N-client mesh works; clipboard sync is text-only and on-switch.
+- The native addon code is provided for both OSes but should be tested on real
+  hardware before production use.
+- Per-machine DPI scaling is mapped 1:1 in pixels; mixed-DPI setups may want a
+  scale factor (planned).
 
 ## License
-For open source projects, say how it is licensed.
 
-## Project status
-If you have run out of energy or time for your project, put a note at the top of the README saying that development has slowed down or stopped completely. Someone may choose to fork your project or volunteer to step in as a maintainer or owner, allowing your project to keep going. You can also make an explicit request for maintainers.
+MIT

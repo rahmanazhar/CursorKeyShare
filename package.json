@@ -1,0 +1,90 @@
+{
+  "name": "cursorkeyshare",
+  "version": "0.1.0",
+  "description": "Cursorkeyshare — a software KVM that shares one keyboard & mouse across Mac and Windows machines on your network, with encrypted TCP/UDP transport and a draggable screen layout.",
+  "author": "Cursorkeyshare",
+  "license": "MIT",
+  "main": "src/main/main.js",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron . --dev",
+    "build:native": "node-gyp rebuild",
+    "rebuild": "node-gyp rebuild",
+    "build:icon": "node scripts/make-icon.js",
+    "postinstall": "node scripts/build-native.js",
+    "pack": "electron-builder --dir",
+    "dist": "electron-builder",
+    "dist:mac": "node scripts/make-icon.js && electron-builder --mac --arm64 --x64",
+    "dist:mac:arm64": "node scripts/make-icon.js && electron-builder --mac --arm64",
+    "dist:mac:x64": "node scripts/make-icon.js && electron-builder --mac --x64",
+    "dist:mac:universal": "node scripts/make-icon.js && electron-builder --mac --universal",
+    "dist:win": "node scripts/make-icon.js && electron-builder --win"
+  },
+  "dependencies": {
+    "node-addon-api": "^8.0.0",
+    "uiohook-napi": "^1.5.4"
+  },
+  "optionalDependencies": {
+    "@nut-tree-fork/nut-js": "^4.2.0"
+  },
+  "devDependencies": {
+    "electron": "^31.0.0",
+    "electron-builder": "^24.13.3",
+    "@electron/rebuild": "^3.6.0",
+    "node-gyp": "^10.1.0"
+  },
+  "build": {
+    "appId": "com.cursorkeyshare.app",
+    "productName": "Cursorkeyshare",
+    "directories": {
+      "output": "dist",
+      "buildResources": "buildResources"
+    },
+    "files": [
+      "src/**/*",
+      "assets/**/*",
+      "build/Release/*.node",
+      "!**/*.md",
+      "!build/Release/obj/**",
+      "!build/Release/*.{pdb,ipdb,iobj,exp,lib,vcxproj,vcxproj.filters,sln}"
+    ],
+    "asar": true,
+    "asarUnpack": ["**/*.node"],
+    "mac": {
+      "category": "public.app-category.utilities",
+      "icon": "buildResources/icon.png",
+      "target": [
+        { "target": "dmg", "arch": ["arm64", "x64"] }
+      ],
+      "artifactName": "${productName}-${version}-${arch}.${ext}",
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false,
+      "entitlements": "buildResources/entitlements.mac.plist",
+      "entitlementsInherit": "buildResources/entitlements.mac.inherit.plist",
+      "notarize": false,
+      "extendInfo": {
+        "LSUIElement": true
+      }
+    },
+    "dmg": {
+      "title": "${productName} ${version}",
+      "icon": "buildResources/icon.png",
+      "iconSize": 100,
+      "iconTextSize": 12,
+      "window": { "width": 540, "height": 380 },
+      "contents": [
+        { "x": 140, "y": 210, "type": "file" },
+        { "x": 400, "y": 210, "type": "link", "path": "/Applications" }
+      ]
+    },
+    "win": {
+      "icon": "buildResources/icon.png",
+      "target": ["nsis"]
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true
+    }
+  }
+}

@@ -1,0 +1,13 @@
+node_modules/
+build/
+dist/
+out/
+*.log
+.DS_Store
+npm-debug.log*
+.env
+*.node
+
+# Built installers live in dist/ (ignored). To publish one, force-add it:
+#   git add -f dist/Cursorkeyshare-0.1.0-arm64.dmg
+# and it will be stored via Git LFS (see .gitattributes).

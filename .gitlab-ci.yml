@@ -1,0 +1,50 @@
+# GitLab CI: build the macOS DMG on a GitLab-hosted Apple-silicon runner.
+#
+# IMPORTANT: GitLab SaaS macOS runners require a Premium/Ultimate namespace and
+# are billed at a 6x compute-minute factor, so the mac job is gated to run only
+# on version tags (push a tag like v0.1.0 to trigger a release build).
+#
+# Required CI/CD variables (Settings > CI/CD > Variables) for a SIGNED+NOTARIZED
+# build — omit them all for an unsigned build:
+#   MAC_CSC_LINK                 base64 of Developer ID Application .p12
+#   MAC_CSC_KEY_PASSWORD         password for the .p12
+#   APPLE_ID                     Apple ID email
+#   APPLE_APP_SPECIFIC_PASSWORD  app-specific password
+#   APPLE_TEAM_ID                10-char Team ID
+
+stages: [build]
+
+variables:
+  GIT_LFS_SKIP_SMUDGE: "1"   # the build doesn't need any LFS-stored source assets
+
+build:mac:
+  stage: build
+  tags: [saas-macos-medium-m1]      # GitLab hosted Apple-silicon runner
+  image: macos-15-xcode-16          # pinned; macos-26-xcode-26 is the current default
+  rules:
+    - if: '$CI_COMMIT_TAG'          # release tags only — controls cost
+  before_script:
+    - export HOMEBREW_NO_AUTO_UPDATE=1
+    # node@20 is keg-only on Homebrew, so put it on PATH if we have to install it.
+    - node -v || { brew install node@20 && export PATH="$(brew --prefix node@20)/bin:$PATH"; }
+    - npm ci
+  script:
+    - npm run build:icon
+    # Universal (arm64+x64) custom addon so both DMGs get a compatible binary.
+    - bash scripts/build-native-mac.sh
+    # Only define the signing cert when the secret is actually set — an empty
+    # CSC_LINK is treated as a real (broken) cert by electron-builder.
+    - |
+      if [ -n "$MAC_CSC_LINK" ] && [ -n "$APPLE_TEAM_ID" ] && [ -n "$APPLE_ID" ] && [ -n "$APPLE_APP_SPECIFIC_PASSWORD" ]; then
+        export CSC_LINK="$MAC_CSC_LINK" CSC_KEY_PASSWORD="$MAC_CSC_KEY_PASSWORD"
+        npx electron-builder --mac --arm64 --x64 --publish never -c.mac.notarize.teamId="$APPLE_TEAM_ID"
+      else
+        echo "Signing cert / Apple credentials incomplete — building unsigned, notarization skipped"
+        npx electron-builder --mac --arm64 --x64 --publish never
+      fi
+  artifacts:
+    name: "cursorkeyshare-mac-$CI_COMMIT_TAG"
+    paths:
+      - dist/*.dmg
+      - dist/*.blockmap
+    expire_in: 30 days
