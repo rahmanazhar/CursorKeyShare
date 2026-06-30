@@ -23,7 +23,7 @@ try {
 const DEFAULTS = () => ({
   version: 1,
   role: 'server', // 'server' (has the keyboard/mouse) | 'client'
-  name: os.hostname(),
+  name: os.hostname().replace(/\.local$/i, '') || 'machine', // drop mDNS ".local"
   group: 'cursorkeyshare', // KDF salt; all members must match
   tcpPort: 24800,
   udpPort: 24801,
