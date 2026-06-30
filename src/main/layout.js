@@ -61,8 +61,34 @@ class Layout {
       merged.layoutX = this._rightmost();
       merged.layoutY = 0;
     }
+    // Never let a node's rectangle overlap another machine's — overlap breaks
+    // edge crossing (the cursor can't reach an overlapped screen, or worse,
+    // hijacks input). A stale/overlapping saved position is relocated to the
+    // right of everything else. (Manual edge-to-edge placement does not overlap.)
+    if (this._overlapsAny(merged)) {
+      merged.layoutX = this._rightmost();
+      merged.layoutY = 0;
+    }
     this.nodes.set(node.id, merged);
     return merged;
+  }
+
+  _rectsOverlap(a, b) {
+    return (
+      a.layoutX < b.layoutX + b.width &&
+      a.layoutX + a.width > b.layoutX &&
+      a.layoutY < b.layoutY + b.height &&
+      a.layoutY + a.height > b.layoutY
+    );
+  }
+
+  /** Does `node` overlap any OTHER node currently in the layout? */
+  _overlapsAny(node) {
+    for (const o of this.nodes.values()) {
+      if (o.id === node.id) continue;
+      if (this._rectsOverlap(node, o)) return true;
+    }
+    return false;
   }
 
   remove(id) {

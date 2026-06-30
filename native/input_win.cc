@@ -41,18 +41,27 @@ LRESULT CALLBACK MouseProc(int code, WPARAM wParam, LPARAM lParam) {
     bool suppress = g_suppress.load();
     switch (wParam) {
       case WM_MOUSEMOVE: {
+        // Ignore moves we generated ourselves (warpCursor on enter/return), so
+        // they don't register as user movement. Let them through (don't block).
+        if (p->flags & LLMHF_INJECTED) break;
+        if (suppress) {
+          // The cursor is frozen at the park point (g_center*) — set there when
+          // suppression began and kept there by blocking every physical move.
+          // pt therefore equals park + this move's delta, so report the delta and
+          // block. No per-move SetCursorPos => no cursor jitter / "second cursor".
+          ev.type = InputEvent::MouseMove;
+          ev.dx = p->pt.x - g_centerX;
+          ev.dy = p->pt.y - g_centerY;
+          ev.x = g_centerX; ev.y = g_centerY;
+          g_cb(ev);
+          return 1; // swallow; local cursor stays put
+        }
         if (!g_haveLast) { g_lastX = p->pt.x; g_lastY = p->pt.y; g_haveLast = true; }
         ev.type = InputEvent::MouseMove;
         ev.dx = p->pt.x - g_lastX;
         ev.dy = p->pt.y - g_lastY;
         ev.x = p->pt.x; ev.y = p->pt.y;
         g_cb(ev);
-        if (suppress) {
-          // Re-park so deltas keep flowing while the local cursor stays put.
-          SetCursorPos(g_centerX, g_centerY);
-          g_lastX = g_centerX; g_lastY = g_centerY;
-          return 1;
-        }
         g_lastX = p->pt.x; g_lastY = p->pt.y;
         break;
       }
@@ -141,10 +150,12 @@ void Stop() {
 
 void SetSuppress(bool on) {
   if (on) {
+    // The caller has already parked the cursor (warpCursor) at the point we
+    // should freeze it. Use that as the delta baseline.
     POINT pt; GetCursorPos(&pt);
-    g_centerX = GetSystemMetrics(SM_CXSCREEN) / 2;
-    g_centerY = GetSystemMetrics(SM_CYSCREEN) / 2;
-    g_lastX = pt.x; g_lastY = pt.y;
+    g_centerX = pt.x; g_centerY = pt.y;
+  } else {
+    g_haveLast = false; // re-baseline free-move deltas after returning local
   }
   g_suppress = on;
 }
