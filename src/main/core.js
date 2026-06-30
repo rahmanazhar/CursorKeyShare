@@ -22,6 +22,13 @@
 const EventEmitter = require('events');
 
 const EDGE = 2; // px tolerance for "cursor is against a screen edge"
+// Hysteresis: after crossing a shared edge we place the cursor this many px
+// INSIDE the destination, away from that edge. Without it the cursor lands
+// exactly on the boundary and the slightest reverse delta (hand jitter) — or the
+// edge it returns onto — re-triggers the opposite crossing, so control flaps
+// between the two machines. MARGIN must comfortably exceed mouse jitter (~1-3px)
+// and the EDGE trigger zone.
+const MARGIN = 16;
 
 function clamp(v, lo, hi) {
   return v < lo ? lo : v > hi ? hi : v;
@@ -78,6 +85,20 @@ class ServerCore extends EventEmitter {
     return { x: n.originX + Math.floor(n.width / 2), y: n.originY + Math.floor(n.height / 2) };
   }
 
+  // Pull a GLOBAL point at least MARGIN px inside `node` on every side, so a
+  // crossing lands clear of the shared edge (hysteresis). Tiny nodes (smaller
+  // than 2*MARGIN on an axis) fall back to their center on that axis.
+  _insetInto(node, x, y, m) {
+    const loX = node.layoutX + m;
+    const hiX = node.layoutX + node.width - 1 - m;
+    const loY = node.layoutY + m;
+    const hiY = node.layoutY + node.height - 1 - m;
+    return {
+      x: hiX >= loX ? clamp(x, loX, hiX) : node.layoutX + Math.floor(node.width / 2),
+      y: hiY >= loY ? clamp(y, loY, hiY) : node.layoutY + Math.floor(node.height / 2),
+    };
+  }
+
   // ---- mouse ---------------------------------------------------------------
 
   _onMove(e) {
@@ -114,28 +135,38 @@ class ServerCore extends EventEmitter {
 
     const node = this.layout.nodeAt(probe.x, probe.y);
     if (!node || node.id === this.layout.localId) return null;
-    const entry = {
-      x: clamp(probe.x, node.layoutX, node.layoutX + node.width - 1),
-      y: clamp(probe.y, node.layoutY, node.layoutY + node.height - 1),
-    };
+    // Land MARGIN px inside the destination (away from the shared edge) so a
+    // reverse jitter doesn't immediately bounce us back.
+    const entry = this._insetInto(node, probe.x, probe.y, MARGIN);
     return { node, entry };
   }
 
   // Controlling a remote: move the virtual cursor by deltas, forward, and detect
   // crossing back into our own screen.
   _onMoveRemote(e) {
-    const from = this.layout.get(this.activeId) || this._localNode();
-    const r = this.layout.applyDelta(from, this.vx, this.vy, e.dx, e.dy);
-    this.vx = r.x;
-    this.vy = r.y;
+    const active = this.layout.get(this.activeId) || this._localNode();
+    const r = this.layout.applyDelta(active, this.vx, this.vy, e.dx, e.dy);
 
-    if (r.node && r.node.id === this.layout.localId) {
-      this._returnLocal(r.node);
-      return;
-    }
     if (r.node && r.node.id !== this.activeId) {
-      this._switchRemote(r.node); // moved directly between two remote screens
+      // A crossing. Debounce it: within the guard window we keep control where it
+      // is and CLAMP the virtual cursor to the active screen — never let it drift
+      // off-screen while we're still controlling it (that would desync + flicker).
+      const now = Date.now();
+      if (now - this._lastSwitch < (this.config.edgeGuardMs || 0)) {
+        this.vx = clamp(r.x, active.layoutX, active.layoutX + active.width - 1);
+        this.vy = clamp(r.y, active.layoutY, active.layoutY + active.height - 1);
+      } else {
+        this.vx = r.x;
+        this.vy = r.y;
+        if (r.node.id === this.layout.localId) this._returnLocal(r.node);
+        else this._switchRemote(r.node); // moved directly between two remote screens
+        return; // the return/switch already repositioned + notified
+      }
+    } else {
+      this.vx = r.x;
+      this.vy = r.y;
     }
+
     const node = this.layout.get(this.activeId);
     if (node) {
       const loc = this.layout.toLocal(node, this.vx, this.vy);
@@ -166,7 +197,12 @@ class ServerCore extends EventEmitter {
   }
 
   _switchRemote(node) {
+    this._lastSwitch = Date.now();
     if (this.remoteId && this.remoteId !== node.id) this.server.sendLeave(this.remoteId);
+    // Inset into the new screen so we don't sit on the edge we just crossed.
+    const p = this._insetInto(node, this.vx, this.vy, MARGIN);
+    this.vx = p.x;
+    this.vy = p.y;
     this.activeId = node.id;
     this.remoteId = node.id;
     const loc = this.layout.toLocal(node, this.vx, this.vy);
@@ -174,10 +210,14 @@ class ServerCore extends EventEmitter {
     this.emit('active-changed', { id: node.id, local: false });
   }
 
+  // Guard is enforced by the caller (_onMoveRemote); here we just land.
   _returnLocal(localNode) {
-    const now = Date.now();
-    if (now - this._lastSwitch < (this.config.edgeGuardMs || 0)) return;
-    this._lastSwitch = now;
+    this._lastSwitch = Date.now();
+    // Park MARGIN px inside our own screen so we don't sit on the edge that
+    // would immediately re-cross back to the remote.
+    const p = this._insetInto(localNode, this.vx, this.vy, MARGIN);
+    this.vx = p.x;
+    this.vy = p.y;
 
     this.mode = 'local';
     this.activeId = this.layout.localId;
