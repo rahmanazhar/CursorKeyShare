@@ -108,6 +108,10 @@ function startEngine() {
   }
 
   state.backend = getBackend();
+  log(
+    `input backend: ${state.backend.constructor.name}` +
+      (state.backend.suppressable ? ' (true suppression)' : ' (soft suppression — build the native addon for full)')
+  );
   registerLocalNode();
 
   if (state.cfg.role === 'server') {
@@ -129,6 +133,8 @@ function startEngine() {
     });
     state.core.on('active-changed', (e) => {
       state.activeId = e.id;
+      const node = state.layout.get(e.id);
+      log('control → ' + (e.local ? 'this machine' : (node ? node.name : e.id)));
       if (!e.local && state.cfg.switchToClipboard) {
         const text = clipboard.readText();
         if (text) server.sendClipboard(e.id, 'text', text);
