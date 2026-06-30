@@ -93,6 +93,19 @@ button.ghost { background: transparent; }
 
 .hint { color: var(--muted); font-size: 11px; margin-top: 8px; }
 
+/* inline input + action button (passphrase generate, address copy) */
+.addrbox { display: flex; gap: 8px; align-items: stretch; }
+.addrbox input { flex: 1; min-width: 0; }
+.addrbox code {
+  flex: 1; min-width: 0; display: flex; align-items: center;
+  background: var(--panel2); border: 1px solid var(--line); border-radius: 8px;
+  padding: 9px 10px; color: var(--text);
+  font: 13px/1.4 ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  white-space: nowrap; overflow: auto;
+}
+.addrbox code.none { color: var(--muted); }
+button.mini { padding: 6px 10px; font-size: 12px; white-space: nowrap; }
+
 /* stage / layout editor */
 .stagepanel { display: flex; flex-direction: column; }
 .stage {

@@ -20,6 +20,14 @@ fi
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
+# Start from a clean build dir. The `postinstall` hook (scripts/build-native.js)
+# runs `node-gyp rebuild` against system Node and leaves a build/node_gyp_bins/
+# symlink dir behind. node-gyp's `clean` step does NOT remove node_gyp_bins, so
+# the first per-arch rebuild below would die with
+#   EEXIST: file already exists, symlink '.../python3' -> 'build/node_gyp_bins/python3'
+# Removing build/ here makes this script robust regardless of prior state.
+rm -rf build
+
 # NOTE: electron-rebuild only rebuilds modules under node_modules/, so it can NOT
 # build this ROOT binding.gyp addon. Use node-gyp directly, against Electron's
 # headers, once per arch. (The addon is N-API, so it's ABI-stable across the

@@ -44,6 +44,14 @@
           <input id="serverHost" type="text" placeholder="192.168.1.10" />
         </label>
 
+        <div class="field" id="localAddrInfo">
+          <span>This machine's address <small>(give this to clients)</small></span>
+          <div class="addrbox">
+            <code id="localAddrValue">detecting…</code>
+            <button id="copyAddrBtn" type="button" class="ghost mini" title="Copy address">Copy</button>
+          </div>
+        </div>
+
         <label class="field">
           <span>Group name <small>(must match on all machines)</small></span>
           <input id="group" type="text" />
@@ -51,7 +59,10 @@
 
         <label class="field">
           <span>Passphrase <small>(encrypts all traffic)</small></span>
-          <input id="passphrase" type="password" placeholder="•••••••• (unchanged)" />
+          <div class="addrbox">
+            <input id="passphrase" type="password" placeholder="•••••••• (unchanged)" />
+            <button id="genPassBtn" type="button" class="ghost mini" title="Generate a strong passphrase">Generate</button>
+          </div>
         </label>
 
         <div class="row">

@@ -16,6 +16,7 @@ const {
 } = require('electron');
 
 const configMod = require('./config');
+const netinfo = require('./netinfo');
 const crypto = require('./net/crypto');
 const { Layout } = require('./layout');
 const { getBackend } = require('./input');
@@ -327,7 +328,13 @@ function createTray() {
 
 function publicConfig() {
   const { passphraseEnc, passphrasePlain, ...rest } = state.cfg;
-  return { ...rest, hasPassphrase: !!(passphraseEnc || passphrasePlain) };
+  return {
+    ...rest,
+    hasPassphrase: !!(passphraseEnc || passphrasePlain),
+    // Live, auto-detected values the UI surfaces (never persisted as config).
+    detectedName: netinfo.detectName(),
+    localIPs: netinfo.detectLocalIPv4s(),
+  };
 }
 
 function registerIpc() {

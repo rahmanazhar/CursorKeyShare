@@ -1,10 +1,11 @@
 'use strict';
 // Renderer: settings form + draggable screen-layout editor.
 // Talks to the main process exclusively through the `window.cks` bridge.
-// NB: use a local name other than `cks` — a top-level `const cks` collides with
-// the non-configurable global that contextBridge.exposeInMainWorld('cks', …)
-// creates, throwing "Identifier 'cks' has already been declared".
 
+// NOTE: don't name this `cks`. The preload exposes the bridge as the global
+// `window.cks` via contextBridge, which is a *non-configurable* global property;
+// a top-level `const cks` collides with it ("Identifier 'cks' has already been
+// declared") and aborts this entire script, leaving the form unpopulated.
 const api = window.cks;
 
 const el = (id) => document.getElementById(id);
@@ -21,21 +22,45 @@ const CHECKS = ['switchToClipboard', 'autoConnect'];
 
 async function loadConfig() {
   cfg = await api.getConfig();
-  el('name').value = cfg.name || '';
+  // Machine name: fall back to the auto-detected hostname, and always show it
+  // as the placeholder so it's clear what "empty" will become.
+  el('name').value = cfg.name || cfg.detectedName || '';
+  el('name').placeholder = cfg.detectedName || 'machine';
   el('role').value = cfg.role || 'server';
   el('serverHost').value = cfg.serverHost || '';
-  el('group').value = cfg.group || '';
+  // Hint a client toward the right LAN: this machine's subnet with a blanked host.
+  const lan = (cfg.localIPs && cfg.localIPs[0]) || '';
+  el('serverHost').placeholder = lan ? lan.replace(/\.\d+$/, '.10') : '192.168.1.10';
+  el('group').value = cfg.group || 'cursorkeyshare';
   el('tcpPort').value = cfg.tcpPort || 24800;
   el('udpPort').value = cfg.udpPort || 24801;
   el('edgeGuardMs').value = cfg.edgeGuardMs ?? 80;
   el('switchToClipboard').checked = !!cfg.switchToClipboard;
   el('autoConnect').checked = !!cfg.autoConnect;
   el('passphrase').placeholder = cfg.hasPassphrase ? '•••••••• (unchanged)' : 'set a passphrase';
+  renderLocalAddr();
   applyRoleVisibility();
 }
 
+// Show this machine's auto-detected address (and TCP port) for the server role.
+function renderLocalAddr() {
+  const box = el('localAddrValue');
+  const ips = cfg.localIPs || [];
+  const port = parseInt(el('tcpPort').value, 10) || cfg.tcpPort || 24800;
+  if (!ips.length) {
+    box.textContent = 'no network detected';
+    box.classList.add('none');
+    return;
+  }
+  box.classList.remove('none');
+  // Primary address first; list any extras so multi-NIC machines are obvious.
+  box.textContent = ips.map((ip) => `${ip}:${port}`).join('   ');
+}
+
 function applyRoleVisibility() {
-  el('serverHostField').style.display = el('role').value === 'client' ? 'flex' : 'none';
+  const isClient = el('role').value === 'client';
+  el('serverHostField').style.display = isClient ? 'flex' : 'none';
+  el('localAddrInfo').style.display = isClient ? 'none' : 'flex';
 }
 
 async function saveConfig() {
@@ -67,6 +92,66 @@ function flashSaved() {
 
 el('saveBtn').addEventListener('click', saveConfig);
 el('role').addEventListener('change', applyRoleVisibility);
+el('tcpPort').addEventListener('input', renderLocalAddr); // keep shown port in sync
+
+// Copy this machine's primary address so it can be pasted on a client.
+el('copyAddrBtn').addEventListener('click', async () => {
+  const ip = (cfg.localIPs && cfg.localIPs[0]) || '';
+  if (!ip) return;
+  const port = parseInt(el('tcpPort').value, 10) || 24800;
+  await copyText(`${ip}:${port}`);
+  flashBtn(el('copyAddrBtn'), 'Copied ✓');
+});
+
+// Generate a strong, copy-pasteable passphrase, reveal it, and put it on the
+// clipboard so it can be pasted on the other machines (the secret must match
+// on every member).
+el('genPassBtn').addEventListener('click', async () => {
+  const pass = generatePassphrase();
+  const input = el('passphrase');
+  input.type = 'text';
+  input.value = pass;
+  await copyText(pass);
+  flashBtn(el('genPassBtn'), 'Copied ✓');
+});
+
+// Clipboard write that also works in an Electron file:// renderer, where the
+// async Clipboard API may be unavailable; falls back to execCommand.
+async function copyText(text) {
+  try {
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(text);
+      return;
+    }
+  } catch { /* fall through */ }
+  const ta = document.createElement('textarea');
+  ta.value = text;
+  ta.style.position = 'fixed';
+  ta.style.opacity = '0';
+  document.body.appendChild(ta);
+  ta.select();
+  try { document.execCommand('copy'); } catch { /* best effort */ }
+  document.body.removeChild(ta);
+}
+
+function generatePassphrase() {
+  // Readable token: 5 groups of 4 chars from an unambiguous alphabet (no
+  // 0/O/1/l/I), e.g. "k7mz-9xqp-h3rt-...". ~20 chars × log2(31) ≈ 99 bits —
+  // strong, yet still re-typeable on another machine.
+  const ALPHA = 'abcdefghjkmnpqrstuvwxyz23456789';
+  const rnd = new Uint8Array(20);
+  crypto.getRandomValues(rnd);
+  const chars = [...rnd].map((b) => ALPHA[b % ALPHA.length]);
+  const groups = [];
+  for (let i = 0; i < chars.length; i += 4) groups.push(chars.slice(i, i + 4).join(''));
+  return groups.join('-');
+}
+
+function flashBtn(b, msg) {
+  const t = b.textContent;
+  b.textContent = msg;
+  setTimeout(() => (b.textContent = t), 1400);
+}
 
 el('toggleBtn').addEventListener('click', async () => {
   if (status.running) await api.stop();
