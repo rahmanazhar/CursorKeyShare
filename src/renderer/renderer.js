@@ -1,8 +1,11 @@
 'use strict';
 // Renderer: settings form + draggable screen-layout editor.
 // Talks to the main process exclusively through the `window.cks` bridge.
+// NB: use a local name other than `cks` — a top-level `const cks` collides with
+// the non-configurable global that contextBridge.exposeInMainWorld('cks', …)
+// creates, throwing "Identifier 'cks' has already been declared".
 
-const cks = window.cks;
+const api = window.cks;
 
 const el = (id) => document.getElementById(id);
 const stage = el('stage');
@@ -17,7 +20,7 @@ const FIELDS = ['name', 'role', 'serverHost', 'group', 'tcpPort', 'udpPort', 'ed
 const CHECKS = ['switchToClipboard', 'autoConnect'];
 
 async function loadConfig() {
-  cfg = await cks.getConfig();
+  cfg = await api.getConfig();
   el('name').value = cfg.name || '';
   el('role').value = cfg.role || 'server';
   el('serverHost').value = cfg.serverHost || '';
@@ -49,7 +52,7 @@ async function saveConfig() {
   };
   const pass = el('passphrase').value;
   if (pass) patch.passphrase = pass;
-  cfg = await cks.setConfig(patch);
+  cfg = await api.setConfig(patch);
   el('passphrase').value = '';
   el('passphrase').placeholder = cfg.hasPassphrase ? '•••••••• (unchanged)' : 'set a passphrase';
   flashSaved();
@@ -66,8 +69,8 @@ el('saveBtn').addEventListener('click', saveConfig);
 el('role').addEventListener('change', applyRoleVisibility);
 
 el('toggleBtn').addEventListener('click', async () => {
-  if (status.running) await cks.stop();
-  else await cks.start();
+  if (status.running) await api.stop();
+  else await api.start();
 });
 
 // ---- status ----------------------------------------------------------------
@@ -155,7 +158,7 @@ function renderLayout() {
       rm.addEventListener('pointerdown', (e) => e.stopPropagation());
       rm.addEventListener('click', async (e) => {
         e.stopPropagation();
-        await cks.removePeer(n.id);
+        await api.removePeer(n.id);
       });
       d.appendChild(rm);
     }
@@ -204,7 +207,7 @@ async function endDrag(e) {
   const x = curX ?? startLayoutX;
   const y = curY ?? startLayoutY;
   drag = null;
-  await cks.setPosition(id, x, y);
+  await api.setPosition(id, x, y);
 }
 stage.addEventListener('pointerup', endDrag);
 stage.addEventListener('pointercancel', endDrag);
@@ -261,16 +264,16 @@ function escapeHtml(s) {
 
 // ---- wire events -----------------------------------------------------------
 
-cks.onLayout((d) => { layout = d; renderLayout(); });
-cks.onStatus((s) => { renderStatus(s); });
-cks.onLog((e) => addLog(e));
+api.onLayout((d) => { layout = d; renderLayout(); });
+api.onStatus((s) => { renderStatus(s); });
+api.onLog((e) => addLog(e));
 
 window.addEventListener('resize', renderLayout);
 
 (async function init() {
   await loadConfig();
-  layout = await cks.getLayout();
+  layout = await api.getLayout();
   renderLayout();
-  const s = await cks.status().catch(() => ({ running: false }));
+  const s = await api.status().catch(() => ({ running: false }));
   renderStatus({ running: !!s.running, role: cfg.role, active: s.active, peers: [] });
 })();
