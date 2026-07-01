@@ -13,6 +13,7 @@ const {
   nativeImage,
   clipboard,
   globalShortcut,
+  powerSaveBlocker,
   screen,
 } = require('electron');
 
@@ -30,7 +31,7 @@ const { ServerCore, ClientCore } = require('./core');
 // which leaves the Electron app APIs undefined.
 if (!app || typeof app.whenReady !== 'function') {
   console.error(
-    'Cursorkeyshare must be started via Electron, not plain Node.\n' +
+    'CursorKeyShare must be started via Electron, not plain Node.\n' +
       'If you see this, ELECTRON_RUN_AS_NODE is likely set in your environment.\n' +
       'Unset it and run `npm start`.'
   );
@@ -38,6 +39,14 @@ if (!app || typeof app.whenReady !== 'function') {
 }
 
 const isDev = process.argv.includes('--dev');
+
+// Keep networking + timers alive when the window is minimized/backgrounded.
+// Chromium throttles (and can freeze) hidden/occluded windows, which drops the
+// share connection while minimized — reported on Windows. These must be set
+// before the app is ready.
+app.commandLine.appendSwitch('disable-background-timer-throttling');
+app.commandLine.appendSwitch('disable-renderer-backgrounding');
+app.commandLine.appendSwitch('disable-backgrounding-occluded-windows');
 
 const state = {
   cfg: null,
@@ -51,7 +60,25 @@ const state = {
   win: null,
   tray: null,
   lastError: null,
+  powerSaveId: null,
 };
+
+// Prevent the OS from suspending the app (and its sockets/hooks) while sharing.
+function startPowerSaveBlocker() {
+  try {
+    if (state.powerSaveId == null || !powerSaveBlocker.isStarted(state.powerSaveId)) {
+      state.powerSaveId = powerSaveBlocker.start('prevent-app-suspension');
+    }
+  } catch {}
+}
+function stopPowerSaveBlocker() {
+  try {
+    if (state.powerSaveId != null && powerSaveBlocker.isStarted(state.powerSaveId)) {
+      powerSaveBlocker.stop(state.powerSaveId);
+    }
+  } catch {}
+  state.powerSaveId = null;
+}
 
 // ---- desktop bounds --------------------------------------------------------
 
@@ -181,6 +208,7 @@ function startEngine() {
   }
 
   state.running = true;
+  startPowerSaveBlocker();
   pushStatus();
   updateTray();
   return true;
@@ -192,6 +220,7 @@ function stopEngine() {
   if (state.client) try { state.client.stop(); } catch {}
   state.core = state.server = state.client = null;
   state.running = false;
+  stopPowerSaveBlocker();
   state.activeId = state.cfg ? state.cfg.localId : null;
   updateTray();
   pushStatus();
@@ -287,11 +316,12 @@ function createWindow() {
     height: 680,
     minWidth: 720,
     minHeight: 520,
-    title: 'Cursorkeyshare',
+    title: 'CursorKeyShare',
     webPreferences: {
       preload: path.join(__dirname, '../renderer/preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
+      backgroundThrottling: false, // don't throttle when minimized (keeps sharing alive)
     },
   });
   state.win.loadFile(path.join(__dirname, '../renderer/index.html'));
@@ -321,14 +351,14 @@ function trayIcon() {
 function updateTray() {
   if (!state.tray) return;
   const menu = Menu.buildFromTemplate([
-    { label: 'Cursorkeyshare', enabled: false },
+    { label: 'CursorKeyShare', enabled: false },
     { type: 'separator' },
     { label: state.running ? 'Stop sharing' : 'Start sharing', click: () => (state.running ? stopEngine() : startEngine()) },
     { label: 'Open configuration', click: () => { state.win.show(); } },
     { type: 'separator' },
     { label: 'Quit', click: () => { app.isQuitting = true; app.quit(); } },
   ]);
-  state.tray.setToolTip(`Cursorkeyshare — ${state.running ? 'running' : 'stopped'}`);
+  state.tray.setToolTip(`CursorKeyShare — ${state.running ? 'running' : 'stopped'}`);
   state.tray.setContextMenu(menu);
 }
 
