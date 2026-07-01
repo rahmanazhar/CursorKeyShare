@@ -38,8 +38,32 @@ async function loadConfig() {
   el('switchToClipboard').checked = !!cfg.switchToClipboard;
   el('autoConnect').checked = !!cfg.autoConnect;
   el('passphrase').placeholder = cfg.hasPassphrase ? '•••••••• (unchanged)' : 'set a passphrase';
+  populateInterfaces();
+  if (!el('reachHost').value) el('reachHost').value = cfg.serverHost || (cfg.localIPs && cfg.localIPs[0] ? cfg.localIPs[0].replace(/\.\d+$/, '.') : '');
   renderLocalAddr();
   applyRoleVisibility();
+}
+
+// Build the interface dropdown: Auto (best LAN NIC) · Off · each detected NIC.
+function populateInterfaces() {
+  const sel = el('bindInterface');
+  sel.innerHTML = '';
+  const opt = (val, label) => {
+    const o = document.createElement('option');
+    o.value = val;
+    o.textContent = label;
+    sel.appendChild(o);
+  };
+  const ifs = cfg.interfaces || [];
+  const best = ifs[0];
+  opt('auto', best ? `Auto — pin to LAN (${best.name} · ${best.address})` : 'Auto — pin to LAN');
+  opt('off', 'Off — use system routing');
+  for (const i of ifs) opt(i.name, `${i.name} · ${i.address}`);
+  sel.value = cfg.bindInterface || 'auto';
+  const hint = el('reachResult');
+  if (cfg.bindAvailable === false) {
+    hint.textContent = 'Interface pinning needs the native addon (this build uses the JS input backend).';
+  }
 }
 
 // Show this machine's auto-detected address (and TCP port) for the server role.
@@ -74,6 +98,7 @@ async function saveConfig() {
     edgeGuardMs: parseInt(el('edgeGuardMs').value, 10) || 0,
     switchToClipboard: el('switchToClipboard').checked,
     autoConnect: el('autoConnect').checked,
+    bindInterface: el('bindInterface').value,
   };
   const pass = el('passphrase').value;
   if (pass) patch.passphrase = pass;
@@ -93,6 +118,29 @@ function flashSaved() {
 el('saveBtn').addEventListener('click', saveConfig);
 el('role').addEventListener('change', applyRoleVisibility);
 el('tcpPort').addEventListener('input', renderLocalAddr); // keep shown port in sync
+
+// Probe the peer with and without interface pinning and explain the result.
+el('testReachBtn').addEventListener('click', async () => {
+  const host = el('reachHost').value.trim();
+  const out = el('reachResult');
+  const btn = el('testReachBtn');
+  if (!host) { out.textContent = 'Enter the other machine’s IP first.'; return; }
+  out.textContent = 'testing…';
+  btn.disabled = true;
+  const r = await cks.testReach(host).catch(() => null);
+  btn.disabled = false;
+  if (!r || !r.ok) { out.textContent = (r && r.error) || 'test failed'; return; }
+  const via = r.ifName ? ` via ${r.ifName}` : '';
+  if (r.scoped === true && r.unscoped === false) {
+    out.textContent = `✅ Reachable${via} — VPN bypass is working (the normal route was blocked).`;
+  } else if (r.unscoped === true) {
+    out.textContent = '✅ Reachable on the normal route — no VPN interference.';
+  } else if (r.scoped === false || (r.scoped === null && !r.unscoped)) {
+    out.textContent = '❌ Unreachable. Check the IP/firewall — or your VPN forces all traffic (includeAllNetworks), which no app can bypass.';
+  } else {
+    out.textContent = r.unscoped ? '✅ Reachable.' : '❌ Unreachable.';
+  }
+});
 
 // Copy this machine's primary address so it can be pasted on a client.
 el('copyAddrBtn').addEventListener('click', async () => {

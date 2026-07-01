@@ -3,6 +3,7 @@
 // layer and the core orchestrator together; owns the tray and the config window.
 
 const path = require('path');
+const net = require('net');
 const {
   app,
   BrowserWindow,
@@ -17,6 +18,7 @@ const {
 
 const configMod = require('./config');
 const netinfo = require('./netinfo');
+const netbind = require('./net/netbind');
 const crypto = require('./net/crypto');
 const { Layout } = require('./layout');
 const { getBackend } = require('./input');
@@ -114,6 +116,10 @@ function startEngine() {
   );
   registerLocalNode();
 
+  // Which NIC to pin sockets to so LAN traffic bypasses a full-tunnel VPN.
+  const bindIf = netinfo.resolveBindInterface(state.cfg.bindInterface);
+  if (bindIf) log(`network pinned to ${bindIf} (bypasses VPN for LAN peers)`);
+
   if (state.cfg.role === 'server') {
     const server = new NetServer({
       key,
@@ -121,6 +127,7 @@ function startEngine() {
       udpPort: state.cfg.udpPort,
       name: state.cfg.name,
       localId: state.cfg.localId,
+      bindIf,
     });
     wireServerEvents(server);
     server.start();
@@ -151,6 +158,7 @@ function startEngine() {
       name: state.cfg.name,
       localId: state.cfg.localId,
       bounds: localBounds(),
+      bindIf,
     });
     wireClientEvents(client);
     state.client = client;
@@ -340,11 +348,45 @@ function publicConfig() {
     // Live, auto-detected values the UI surfaces (never persisted as config).
     detectedName: netinfo.detectName(),
     localIPs: netinfo.detectLocalIPv4s(),
+    interfaces: netinfo.rankedInterfaces(), // [{name, address}] best-first
+    bindAvailable: netbind.available(), // can we actually pin to a NIC?
   };
 }
 
 function registerIpc() {
   ipcMain.handle('config:get', () => publicConfig());
+
+  // Diagnose LAN reachability to a peer, WITH and WITHOUT interface pinning, so
+  // the user can see whether VPN-bypass is working — or whether their VPN is the
+  // unbeatable includeAllNetworks kind (both fail).
+  ipcMain.handle('net:testReach', async (_e, { host }) => {
+    const target = (host || '').trim().replace(/:\d+$/, '');
+    const port = state.cfg.tcpPort || 24800;
+    const ifName = netinfo.resolveBindInterface(state.cfg.bindInterface);
+    if (!target) return { ok: false, error: 'Enter the other machine’s address first.' };
+
+    const plain = () =>
+      new Promise((res) => {
+        const s = net.connect({ host: target, port });
+        const done = (v) => { try { s.destroy(); } catch {} res(v); };
+        s.setTimeout(2500, () => done(false));
+        s.once('connect', () => done(true));
+        s.once('error', () => done(false));
+      });
+    const scoped = async () => {
+      if (!ifName || !netbind.available()) return null; // pinning n/a
+      try {
+        const s = await netbind.connectBoundTcp(target, port, ifName, 2500);
+        try { s.destroy(); } catch {}
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    const unscoped = await plain();
+    const bound = await scoped();
+    return { ok: true, host: target, port, ifName, unscoped, scoped: bound };
+  });
 
   ipcMain.handle('config:set', (_e, patch) => {
     const wasRunning = state.running;

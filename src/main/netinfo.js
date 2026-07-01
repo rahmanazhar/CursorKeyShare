@@ -49,11 +49,36 @@ function score(c) {
   return s;
 }
 
+// Ranked, best-first list of { name, address } NICs (may be empty if offline).
+function rankedInterfaces() {
+  return candidates().sort((a, b) => score(a) - score(b));
+}
+
 // Ranked, best-first list of LAN IPv4 strings (may be empty if offline).
 function detectLocalIPv4s() {
-  return candidates()
-    .sort((a, b) => score(a) - score(b))
-    .map((c) => c.address);
+  return rankedInterfaces().map((c) => c.address);
+}
+
+// The single best LAN NIC, or null.
+function bestInterface() {
+  return rankedInterfaces()[0] || null;
+}
+
+/**
+ * Resolve the config `bindInterface` setting to the NIC name to scope sockets
+ * to, or null for "use normal OS routing".
+ *   'off'        -> null (don't bind)
+ *   'auto' | ''  -> best detected LAN NIC name
+ *   '<name>'     -> that name if it currently exists, else best (don't strand
+ *                   the user on a NIC that went away)
+ */
+function resolveBindInterface(setting) {
+  if (setting === 'off') return null;
+  const ranked = rankedInterfaces();
+  if (!ranked.length) return null;
+  if (!setting || setting === 'auto') return ranked[0].name;
+  const match = ranked.find((c) => c.name === setting);
+  return match ? match.name : ranked[0].name;
 }
 
 // Hostname without the noisy mDNS ".local" suffix macOS appends.
@@ -61,4 +86,12 @@ function detectName() {
   return os.hostname().replace(/\.local$/i, '') || 'machine';
 }
 
-module.exports = { detectLocalIPv4s, detectName, candidates, score };
+module.exports = {
+  detectLocalIPv4s,
+  detectName,
+  candidates,
+  score,
+  rankedInterfaces,
+  bestInterface,
+  resolveBindInterface,
+};
