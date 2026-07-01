@@ -11,6 +11,7 @@ const dgram = require('dgram');
 const EventEmitter = require('events');
 const crypto = require('./crypto');
 const proto = require('./protocol');
+const netbind = require('./netbind');
 const { FrameReader, frame } = require('./frame');
 
 class NetServer extends EventEmitter {
@@ -24,6 +25,7 @@ class NetServer extends EventEmitter {
     this.udpPort = opts.udpPort;
     this.name = opts.name;
     this.localId = opts.localId;
+    this.bindIf = opts.bindIf || null; // NIC to pin sockets to (VPN bypass), or null
     /** @type {Map<string, any>} */
     this.peers = new Map();
     this._tcp = null;
@@ -35,11 +37,19 @@ class NetServer extends EventEmitter {
     this._udp = dgram.createSocket('udp4');
     this._udp.on('message', (msg, rinfo) => this._onUdp(msg, rinfo));
     this._udp.on('error', (e) => this.emit('error', e));
-    this._udp.bind(this.udpPort);
+    this._udp.bind(this.udpPort, () => this._scope(this._udp));
 
     this._tcp = net.createServer((sock) => this._onConn(sock));
     this._tcp.on('error', (e) => this.emit('error', e));
-    this._tcp.listen(this.tcpPort, () => this.emit('listening', this.tcpPort));
+    this._tcp.listen(this.tcpPort, () => {
+      this._scope(this._tcp);
+      this.emit('listening', this.tcpPort);
+    });
+  }
+
+  // Pin a socket/server to the configured NIC so its LAN traffic bypasses a VPN.
+  _scope(sock) {
+    if (this.bindIf) netbind.bindSocketToInterface(sock, this.bindIf);
   }
 
   stop() {
@@ -57,6 +67,7 @@ class NetServer extends EventEmitter {
 
   _onConn(sock) {
     sock.setNoDelay(true);
+    this._scope(sock); // scope this connection's egress to the pinned NIC too
     const peer = {
       id: null,
       name: null,

@@ -28,6 +28,9 @@ const DEFAULTS = () => ({
   tcpPort: 24800,
   udpPort: 24801,
   serverHost: '', // client-only: address of the server
+  // Which network interface to pin sockets to (VPN bypass). 'auto' = best LAN
+  // NIC, 'off' = normal OS routing, or a specific NIC name like 'en0'.
+  bindInterface: 'auto',
   passphraseEnc: null, // base64 of safeStorage-encrypted passphrase
   passphrasePlain: null, // fallback when safeStorage unavailable (dev only)
   autoConnect: false,

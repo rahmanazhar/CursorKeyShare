@@ -8,6 +8,7 @@ contextBridge.exposeInMainWorld('cks', {
   // config
   getConfig: () => ipcRenderer.invoke('config:get'),
   setConfig: (patch) => ipcRenderer.invoke('config:set', patch),
+  testReach: (host) => ipcRenderer.invoke('net:testReach', { host }),
 
   // layout
   getLayout: () => ipcRenderer.invoke('layout:get'),

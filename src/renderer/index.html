@@ -53,6 +53,20 @@
         </div>
 
         <label class="field">
+          <span>Network interface <small>(pin to LAN to bypass a VPN)</small></span>
+          <select id="bindInterface"></select>
+        </label>
+
+        <div class="field" id="reachField">
+          <span>Check connectivity <small>(to the other machine)</small></span>
+          <div class="addrbox">
+            <input id="reachHost" type="text" placeholder="192.168.1.x" />
+            <button id="testReachBtn" type="button" class="ghost mini">Test</button>
+          </div>
+          <div id="reachResult" class="hint"></div>
+        </div>
+
+        <label class="field">
           <span>Group name <small>(must match on all machines)</small></span>
           <input id="group" type="text" />
         </label>
