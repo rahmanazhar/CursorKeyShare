@@ -1,5 +1,5 @@
 'use strict';
-// Message encryption for Cursorkeyshare.
+// Message encryption for CursorKeyShare.
 //
 // All TCP and UDP payloads are sealed with AES-256-GCM. The key is derived from
 // a user-chosen passphrase with scrypt, salted by a per-session "group id" so

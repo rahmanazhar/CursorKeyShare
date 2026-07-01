@@ -1,8 +1,8 @@
 {
   "name": "cursorkeyshare",
   "version": "0.1.0",
-  "description": "Cursorkeyshare — a software KVM that shares one keyboard & mouse across Mac and Windows machines on your network, with encrypted TCP/UDP transport and a draggable screen layout.",
-  "author": "Cursorkeyshare",
+  "description": "CursorKeyShare — a software KVM that shares one keyboard & mouse across Mac and Windows machines on your network, with encrypted TCP/UDP transport and a draggable screen layout.",
+  "author": "CursorKeyShare",
   "license": "MIT",
   "main": "src/main/main.js",
   "scripts": {
@@ -36,7 +36,7 @@
   },
   "build": {
     "appId": "com.cursorkeyshare.app",
-    "productName": "Cursorkeyshare",
+    "productName": "CursorKeyShare",
     "directories": {
       "output": "dist",
       "buildResources": "buildResources"
@@ -62,10 +62,7 @@
       "gatekeeperAssess": false,
       "entitlements": "buildResources/entitlements.mac.plist",
       "entitlementsInherit": "buildResources/entitlements.mac.inherit.plist",
-      "notarize": false,
-      "extendInfo": {
-        "LSUIElement": true
-      }
+      "notarize": false
     },
     "dmg": {
       "title": "${productName} ${version}",
