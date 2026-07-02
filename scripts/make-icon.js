@@ -1,11 +1,11 @@
 'use strict';
-// Generates the app icon and tray icons with no external dependencies (pure
-// Node zlib). Outputs:
+// Generates the CursorKeyShare app icon and tray icons with no external
+// dependencies (pure Node zlib). Outputs:
 //   buildResources/icon.png        1024x1024  app icon (electron-builder -> .icns/.ico)
 //   assets/tray.png  / @2x         16/32      colored tray icon (Windows/Linux)
 //   assets/trayTemplate.png / @2x  16/32      black template tray icon (macOS menu bar)
 //
-// The two-screens-with-a-cursor mark reflects the KVM concept.
+// The mark is a cursor pointer resting on a keyboard keycap — "Cursor" + "Key".
 
 const fs = require('fs');
 const path = require('path');
@@ -61,6 +61,7 @@ function roundRectCoverage(px, py, x, y, w, h, r) {
   return clamp(0.5 - dist, 0, 1);
 }
 
+// Source-over alpha blend of rgb (0..1) at coverage a onto pixel i.
 function over(dst, i, r, g, b, a) {
   if (a <= 0) return;
   const da = dst[i + 3] / 255;
@@ -83,9 +84,55 @@ function pointInPoly(x, y, pts) {
   return inside;
 }
 
+function fillRoundRect(buf, s, x, y, w, h, r, rgb, alpha) {
+  for (let py = Math.floor(y - 2); py < y + h + 2; py++) {
+    for (let px = Math.floor(x - 2); px < x + w + 2; px++) {
+      if (px < 0 || py < 0 || px >= s || py >= s) continue;
+      const cov = roundRectCoverage(px + 0.5, py + 0.5, x, y, w, h, r);
+      if (cov > 0) over(buf, (py * s + px) * 4, rgb[0] / 255, rgb[1] / 255, rgb[2] / 255, cov * alpha);
+    }
+  }
+}
+
+// The classic arrow-cursor polygon, tip at (ox,oy), sized by `scale`.
+function cursorPts(ox, oy, scale) {
+  return [
+    [0, 0], [0, 1.0], [0.28, 0.73], [0.45, 1.12], [0.60, 1.05], [0.43, 0.66], [0.75, 0.60],
+  ].map(([x, y]) => [ox + x * scale, oy + y * scale]);
+}
+
+// Draw a filled, anti-aliased polygon (2x2 supersample).
+function fillPoly(buf, s, pts, rgb, alpha) {
+  let minX = s, minY = s, maxX = 0, maxY = 0;
+  for (const p of pts) { minX = Math.min(minX, p[0]); minY = Math.min(minY, p[1]); maxX = Math.max(maxX, p[0]); maxY = Math.max(maxY, p[1]); }
+  for (let py = Math.floor(minY - 1); py <= maxY + 1; py++) {
+    for (let px = Math.floor(minX - 1); px <= maxX + 1; px++) {
+      if (px < 0 || py < 0 || px >= s || py >= s) continue;
+      let cov = 0;
+      for (let sy = 0; sy < 2; sy++) for (let sx = 0; sx < 2; sx++) {
+        if (pointInPoly(px + 0.25 + sx * 0.5, py + 0.25 + sy * 0.5, pts)) cov += 0.25;
+      }
+      if (cov > 0) over(buf, (py * s + px) * 4, rgb[0] / 255, rgb[1] / 255, rgb[2] / 255, cov * alpha);
+    }
+  }
+}
+
+// Cursor with a contrasting outline: draw the fill offset in the outline colour,
+// then the fill on top.
+function drawCursor(buf, s, ox, oy, scale, fill, outline, outlineW) {
+  if (outline && outlineW > 0) {
+    for (let a = 0; a < 8; a++) {
+      const dx = Math.round(Math.cos((a / 8) * Math.PI * 2) * outlineW);
+      const dy = Math.round(Math.sin((a / 8) * Math.PI * 2) * outlineW);
+      fillPoly(buf, s, cursorPts(ox + dx, oy + dy, scale), outline, 1);
+    }
+  }
+  fillPoly(buf, s, cursorPts(ox, oy, scale), fill, 1);
+}
+
 // ---- compose ---------------------------------------------------------------
-// mode: 'app' (full, with squircle bg + cursor), 'trayColor' (squircle + screens),
-//       'trayMono' (black screens glyph on transparent, for macOS template).
+// mode: 'app' (squircle bg + keycap + cursor), 'trayColor' (squircle + cursor),
+//       'trayMono' (black cursor glyph on transparent, for the macOS menu bar).
 
 function compose(size, mode) {
   const s = size;
@@ -97,8 +144,8 @@ function compose(size, mode) {
     const margin = s * 0.06;
     const bx = margin, by = margin, bw = s - margin * 2, bh = s - margin * 2;
     const radius = bw * 0.2237;
-    const c1 = [0x4f, 0x8c, 0xff];
-    const c2 = [0x7a, 0x4f, 0xff];
+    const c1 = [0x54, 0x8b, 0xff]; // blue
+    const c2 = [0x8b, 0x5c, 0xff]; // purple
     for (let y = 0; y < s; y++) {
       for (let x = 0; x < s; x++) {
         const cov = roundRectCoverage(x + 0.5, y + 0.5, bx, by, bw, bh, radius);
@@ -110,40 +157,26 @@ function compose(size, mode) {
     }
   }
 
-  // two overlapping "screens"
-  const ink = mono ? [0, 0, 0] : [1, 1, 1];
-  const inkA = mono ? 1 : 0.95;
-  const screens = [
-    { x: 0.24 * s, y: 0.30 * s, w: 0.36 * s, h: 0.28 * s, a: inkA },
-    { x: 0.42 * s, y: 0.44 * s, w: 0.36 * s, h: 0.28 * s, a: inkA * 0.92 },
-  ];
-  const stroke = Math.max(1.2, s * 0.02);
-  const rr = Math.max(1.5, s * 0.03);
-  for (const sc of screens) {
-    for (let y = Math.floor(sc.y - 2); y < sc.y + sc.h + 2; y++) {
-      for (let x = Math.floor(sc.x - 2); x < sc.x + sc.w + 2; x++) {
-        if (x < 0 || y < 0 || x >= s || y >= s) continue;
-        const outer = roundRectCoverage(x + 0.5, y + 0.5, sc.x, sc.y, sc.w, sc.h, rr);
-        const inner = roundRectCoverage(x + 0.5, y + 0.5, sc.x + stroke, sc.y + stroke, sc.w - stroke * 2, sc.h - stroke * 2, Math.max(0.5, rr * 0.6));
-        const ring = clamp(outer - inner, 0, 1);
-        if (ring > 0) over(buf, (y * s + x) * 4, ink[0], ink[1], ink[2], ring * sc.a);
-        if (!mono && inner > 0) over(buf, (y * s + x) * 4, 1, 1, 1, inner * 0.12 * sc.a);
-      }
-    }
+  if (mono) {
+    // Solid black cursor, centred — reads well at 16px in the menu bar.
+    drawCursor(buf, s, s * 0.30, s * 0.14, s * 0.62, [0, 0, 0], null, 0);
+    return encodePng(s, s, buf);
   }
 
-  // cursor (only on the full app icon — too small/busy on tray sizes)
   if (mode === 'app') {
-    const ox = 0.52 * s, oy = 0.5 * s, scale = 0.12 * s;
-    const pts = [[0, 0], [0, 1.0], [0.28, 0.74], [0.46, 1.12], [0.62, 1.04], [0.44, 0.66], [0.8, 0.62]]
-      .map(([x, y]) => [ox + x * scale, oy + y * scale]);
-    for (let y = 0; y < s; y++) {
-      for (let x = 0; x < s; x++) {
-        if (pointInPoly(x + 0.5, y + 0.5, pts)) over(buf, (y * s + x) * 4, 1, 1, 1, 0.98);
-      }
-    }
+    // Keycap: soft drop shadow, white cap, subtle bottom lip for depth.
+    const kx = s * 0.29, ky = s * 0.30, kw = s * 0.42, kh = s * 0.42, kr = s * 0.11;
+    fillRoundRect(buf, s, kx + s * 0.012, ky + s * 0.03, kw, kh, kr, [0, 0, 0], 0.20); // shadow
+    fillRoundRect(buf, s, kx, ky, kw, kh, kr, [255, 255, 255], 1);                     // cap
+    fillRoundRect(buf, s, kx + s * 0.05, ky + s * 0.05, kw - s * 0.10, kh - s * 0.10, kr * 0.7, [0x4a, 0x55, 0x77], 0.10); // inset face
+    // Cursor sitting on the keycap: purple fill with a white outline so it reads
+    // on both the white cap and the gradient where it overhangs.
+    drawCursor(buf, s, s * 0.40, s * 0.235, s * 0.42, [0x53, 0x3a, 0xe6], [255, 255, 255], Math.max(2, s * 0.02));
+    return encodePng(s, s, buf);
   }
 
+  // trayColor: white cursor on the squircle.
+  drawCursor(buf, s, s * 0.32, s * 0.16, s * 0.56, [255, 255, 255], null, 0);
   return encodePng(s, s, buf);
 }
 
@@ -156,8 +189,7 @@ function write(rel, data) {
   console.log('wrote', rel);
 }
 
-// App icon — electron-builder resolves it from directories.buildResources
-// ("buildResources/", deliberately NOT "build/" which node-gyp owns).
+// App icon — electron-builder resolves it from directories.buildResources.
 write('buildResources/icon.png', compose(1024, 'app'));
 
 // Tray icons. Colored for Windows/Linux; black "...Template" for the macOS menu

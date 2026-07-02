@@ -8,6 +8,7 @@ const dgram = require('dgram');
 const EventEmitter = require('events');
 const crypto = require('./crypto');
 const proto = require('./protocol');
+const netbind = require('./netbind');
 const { FrameReader, frame } = require('./frame');
 
 class NetClient extends EventEmitter {
@@ -24,6 +25,7 @@ class NetClient extends EventEmitter {
     this.serverUdpPort = opts.serverUdpPort || opts.udpPort; // server's UDP port
     this.name = opts.name;
     this.localId = opts.localId;
+    this.bindIf = opts.bindIf || null; // NIC to pin sockets to (VPN bypass), or null
     this.bounds = opts.bounds || { originX: 0, originY: 0, width: 1920, height: 1080 };
 
     this._sock = null;
@@ -31,6 +33,7 @@ class NetClient extends EventEmitter {
     this._reader = new FrameReader();
     this._reconnectTimer = null;
     this._pingTimer = null;
+    this._lastRx = 0; // ms of last inbound TCP traffic (liveness watchdog)
     this._lastMoveSeq = 0;
     this._stopped = false;
     this.connected = false;
@@ -41,7 +44,9 @@ class NetClient extends EventEmitter {
     this._udp = dgram.createSocket('udp4');
     this._udp.on('message', (msg) => this._onUdp(msg));
     this._udp.on('error', (e) => this.emit('error', e));
-    this._udp.bind(this.udpPort);
+    this._udp.bind(this.udpPort, () => {
+      if (this.bindIf) netbind.bindSocketToInterface(this._udp, this.bindIf);
+    });
     this._connect();
   }
 
@@ -55,32 +60,71 @@ class NetClient extends EventEmitter {
     this.connected = false;
   }
 
-  _connect() {
+  async _connect() {
     if (this._stopped) return;
-    const sock = net.createConnection({ host: this.host, port: this.tcpPort }, () => {
-      sock.setNoDelay(true);
-      this.connected = true;
-      this._reader = new FrameReader();
-      this.emit('connected', { host: this.host, port: this.tcpPort });
-      // Announce ourselves.
-      this._sendTcp(
-        proto.encodeJson(proto.T.HELLO, {
-          id: this.localId,
-          name: this.name,
-          udpPort: this.udpPort,
-          bounds: this.bounds,
-        })
-      );
-      // Register our UDP endpoint and start keepalive.
-      this._registerUdp();
-      this._pingTimer = setInterval(() => {
-        this._sendTcp(proto.encodeJson(proto.T.PING, { t: Date.now() }));
-        this._registerUdp();
-      }, 2000);
-    });
-    this._sock = sock;
 
+    // When pinned to a NIC, connect natively so the socket is interface-scoped
+    // BEFORE the SYN goes out — the only reliable way under a full-tunnel VPN.
+    // If that fails (e.g. the peer isn't reachable on that NIC) fall back to a
+    // normal connection, so pinning never regresses a non-VPN setup.
+    if (this.bindIf && netbind.available()) {
+      try {
+        const sock = await netbind.connectBoundTcp(this.host, this.tcpPort, this.bindIf, 4000);
+        if (this._stopped) { try { sock.destroy(); } catch {} return; }
+        this._sock = sock;
+        this._wire(sock);
+        this._onConnected(); // the native connect already completed
+        return;
+      } catch (e) {
+        this.emit('warn', `pinned connect via ${this.bindIf} failed (${e.message}); trying default route`);
+        if (this._stopped) return;
+      }
+    }
+
+    const sock = net.createConnection({ host: this.host, port: this.tcpPort }, () => this._onConnected());
+    this._sock = sock;
+    this._wire(sock);
+  }
+
+  // Runs once the TCP connection is established (either connect path).
+  _onConnected() {
+    const sock = this._sock;
+    if (!sock) return;
+    sock.setNoDelay(true);
+    sock.setKeepAlive(true, 5000); // OS-level probes; slow, backed up by the watchdog below
+    this._lastRx = Date.now(); // liveness baseline — refreshed on every inbound chunk
+    this.connected = true;
+    this._reader = new FrameReader();
+    this.emit('connected', { host: this.host, port: this.tcpPort });
+    // Announce ourselves.
+    this._sendTcp(
+      proto.encodeJson(proto.T.HELLO, {
+        id: this.localId,
+        name: this.name,
+        udpPort: this.udpPort,
+        bounds: this.bounds,
+      })
+    );
+    // Register our UDP endpoint and start keepalive.
+    this._registerUdp();
+    this._pingTimer = setInterval(() => {
+      this._sendTcp(proto.encodeJson(proto.T.PING, { t: Date.now() }));
+      this._registerUdp();
+      // Dead-peer detection. A half-open TCP socket (common after the OS throttles
+      // or briefly suspends a minimized app) never fires 'close', so pings write
+      // into a void and we'd sit here forever. If no traffic has arrived for 3+
+      // missed pings, force-close so the 'close' handler reconnects.
+      if (this._lastRx && Date.now() - this._lastRx > 7000) {
+        this.emit('warn', 'no server traffic for 7s — recycling connection');
+        try { if (this._sock) this._sock.destroy(); } catch {}
+      }
+    }, 2000);
+  }
+
+  // Attach data/error/close handlers to a connected socket.
+  _wire(sock) {
     sock.on('data', (chunk) => {
+      this._lastRx = Date.now(); // any inbound byte = the link is alive
       let blobs;
       try {
         blobs = this._reader.push(chunk);

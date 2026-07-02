@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline';" />
-    <title>Cursorkeyshare</title>
+    <title>CursorKeyShare</title>
     <link rel="stylesheet" href="style.css" />
   </head>
   <body>
@@ -11,7 +11,7 @@
       <div class="brand">
         <span class="logo">⌘</span>
         <div>
-          <div class="title">Cursorkeyshare</div>
+          <div class="title">CursorKeyShare</div>
           <div class="subtitle" id="subtitle">Software KVM for Mac &amp; Windows</div>
         </div>
       </div>
@@ -50,6 +50,20 @@
             <code id="localAddrValue">detecting…</code>
             <button id="copyAddrBtn" type="button" class="ghost mini" title="Copy address">Copy</button>
           </div>
+        </div>
+
+        <label class="field">
+          <span>Network interface <small>(pin to LAN to bypass a VPN)</small></span>
+          <select id="bindInterface"></select>
+        </label>
+
+        <div class="field" id="reachField">
+          <span>Check connectivity <small>(to the other machine)</small></span>
+          <div class="addrbox">
+            <input id="reachHost" type="text" placeholder="192.168.1.x" />
+            <button id="testReachBtn" type="button" class="ghost mini">Test</button>
+          </div>
+          <div id="reachResult" class="hint"></div>
         </div>
 
         <label class="field">

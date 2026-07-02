@@ -26,15 +26,25 @@ npm run build:icon
 echo "==> building UNIVERSAL native addon (arm64 + x64, lipo-merged)"
 bash scripts/build-native-mac.sh
 
-# Only sign+notarize when a signing certificate AND all notarization credentials
-# are present. Notarizing an unsigned app — or with a missing APPLE_* var — is
-# rejected/errors, so require all four.
+# Signing strategy, in order of preference:
+#   1. Developer ID + all APPLE_* creds  -> sign + notarize (no Gatekeeper warning).
+#   2. A stable self-signed identity      -> sign (permissions persist across
+#      rebuilds; still shows "unidentified developer"). Create it once with
+#      scripts/make-signing-cert.sh.
+#   3. Nothing                            -> UNSIGNED (macOS re-prompts for
+#      Accessibility/Input Monitoring on every reinstall).
+SELF_SIGNED_CN="CursorKeyShare Self-Signed"
 NOTARIZE_FLAG=""
 if [[ -n "${CSC_LINK:-}" && -n "${APPLE_TEAM_ID:-}" && -n "${APPLE_ID:-}" && -n "${APPLE_APP_SPECIFIC_PASSWORD:-}" ]]; then
-  echo "==> signing cert + Apple credentials present — enabling notarization"
+  echo "==> Developer ID + Apple credentials present — signing + notarizing"
   NOTARIZE_FLAG="-c.mac.notarize.teamId=${APPLE_TEAM_ID}"
+elif security find-identity -v -p codesigning 2>/dev/null | grep -q "$SELF_SIGNED_CN"; then
+  echo "==> Signing with stable self-signed identity '$SELF_SIGNED_CN' (permissions persist across rebuilds; not notarized)"
+  export CSC_IDENTITY_AUTO_DISCOVERY=true
+  export CSC_NAME="$SELF_SIGNED_CN"
+  unset CSC_LINK CSC_KEY_PASSWORD 2>/dev/null || true
 else
-  echo "==> No signing cert/credentials — building UNSIGNED (ad-hoc). Notarization skipped."
+  echo "==> No signing identity — building UNSIGNED. Run 'bash scripts/make-signing-cert.sh' once so macOS keeps permissions across reinstalls."
   unset CSC_LINK CSC_KEY_PASSWORD 2>/dev/null || true
 fi
 

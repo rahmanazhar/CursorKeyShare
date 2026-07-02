@@ -1,4 +1,4 @@
-# Cursorkeyshare
+# CursorKeyShare
 
 A software KVM — share **one keyboard and mouse across several Mac and Windows
 machines** on your local network. Move the mouse off the edge of one screen and
@@ -119,15 +119,15 @@ bash scripts/build-mac.sh     # icon + universal addon + per-arch DMGs in dist/
 That yields, in `dist/`:
 
 ```
-Cursorkeyshare-0.1.0-arm64.dmg     # Apple Silicon
-Cursorkeyshare-0.1.0-x64.dmg       # Intel
+CursorKeyShare-0.1.0-arm64.dmg     # Apple Silicon
+CursorKeyShare-0.1.0-x64.dmg       # Intel
 ```
 
 **Unsigned vs signed.** With no Apple credentials the script builds an *unsigned*
 DMG you can still run after clearing quarantine:
 
 ```bash
-xattr -dr com.apple.quarantine /Applications/Cursorkeyshare.app   # or right-click > Open
+xattr -dr com.apple.quarantine /Applications/CursorKeyShare.app   # or right-click > Open
 ```
 
 For a **signed + notarized** release, export before building (or set as CI
@@ -156,7 +156,7 @@ tracked by **Git LFS** (`.gitattributes`). To publish a built app to the repo:
 
 ```bash
 git lfs install
-git add -f dist/Cursorkeyshare-0.1.0-arm64.dmg
+git add -f dist/CursorKeyShare-0.1.0-arm64.dmg
 git commit -m "release: macOS arm64 0.1.0"
 git push
 ```

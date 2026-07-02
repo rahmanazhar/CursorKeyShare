@@ -11,6 +11,7 @@ const dgram = require('dgram');
 const EventEmitter = require('events');
 const crypto = require('./crypto');
 const proto = require('./protocol');
+const netbind = require('./netbind');
 const { FrameReader, frame } = require('./frame');
 
 class NetServer extends EventEmitter {
@@ -24,10 +25,12 @@ class NetServer extends EventEmitter {
     this.udpPort = opts.udpPort;
     this.name = opts.name;
     this.localId = opts.localId;
+    this.bindIf = opts.bindIf || null; // NIC to pin sockets to (VPN bypass), or null
     /** @type {Map<string, any>} */
     this.peers = new Map();
     this._tcp = null;
     this._udp = null;
+    this._reaper = null;
     this._motionSeq = 0;
   }
 
@@ -35,11 +38,35 @@ class NetServer extends EventEmitter {
     this._udp = dgram.createSocket('udp4');
     this._udp.on('message', (msg, rinfo) => this._onUdp(msg, rinfo));
     this._udp.on('error', (e) => this.emit('error', e));
-    this._udp.bind(this.udpPort);
+    this._udp.bind(this.udpPort, () => this._scope(this._udp));
 
     this._tcp = net.createServer((sock) => this._onConn(sock));
     this._tcp.on('error', (e) => this.emit('error', e));
-    this._tcp.listen(this.tcpPort, () => this.emit('listening', this.tcpPort));
+    this._tcp.listen(this.tcpPort, () => {
+      this._scope(this._tcp);
+      this.emit('listening', this.tcpPort);
+    });
+
+    // Drop peers that have gone silent (half-open socket, e.g. after the far end
+    // was throttled/suspended while minimized). Clients ping every 2s, so 7s of
+    // silence means the link is dead; destroying it fires 'close' -> the client
+    // reconnects. Symmetric with the client-side watchdog.
+    this._reaper = setInterval(() => this._reapDeadPeers(), 2000);
+  }
+
+  _reapDeadPeers() {
+    const now = Date.now();
+    for (const peer of this.peers.values()) {
+      if (peer.lastRx && now - peer.lastRx > 7000) {
+        this.emit('warn', `client ${peer.name || peer.id} silent for 7s — dropping (will reconnect)`);
+        try { peer.socket.destroy(); } catch {}
+      }
+    }
+  }
+
+  // Pin a socket/server to the configured NIC so its LAN traffic bypasses a VPN.
+  _scope(sock) {
+    if (this.bindIf) netbind.bindSocketToInterface(sock, this.bindIf);
   }
 
   stop() {
@@ -50,6 +77,8 @@ class NetServer extends EventEmitter {
       } catch {}
     }
     this.peers.clear();
+    if (this._reaper) clearInterval(this._reaper);
+    this._reaper = null;
     if (this._tcp) try { this._tcp.close(); } catch {}
     if (this._udp) try { this._udp.close(); } catch {}
     this._tcp = this._udp = null;
@@ -57,6 +86,8 @@ class NetServer extends EventEmitter {
 
   _onConn(sock) {
     sock.setNoDelay(true);
+    sock.setKeepAlive(true, 5000);
+    this._scope(sock); // scope this connection's egress to the pinned NIC too
     const peer = {
       id: null,
       name: null,
@@ -69,9 +100,11 @@ class NetServer extends EventEmitter {
       width: 1920,
       height: 1080,
       alive: true,
+      lastRx: Date.now(), // liveness — refreshed on any inbound TCP/UDP from this peer
     };
 
     sock.on('data', (chunk) => {
+      peer.lastRx = Date.now();
       let blobs;
       try {
         blobs = peer.reader.push(chunk);
@@ -165,6 +198,7 @@ class NetServer extends EventEmitter {
       if (peer) {
         peer.ip = rinfo.address.replace(/^::ffff:/, '');
         peer.udpPort = rinfo.port;
+        peer.lastRx = Date.now();
       }
     }
   }

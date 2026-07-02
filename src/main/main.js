@@ -3,6 +3,7 @@
 // layer and the core orchestrator together; owns the tray and the config window.
 
 const path = require('path');
+const net = require('net');
 const {
   app,
   BrowserWindow,
@@ -12,11 +13,13 @@ const {
   nativeImage,
   clipboard,
   globalShortcut,
+  powerSaveBlocker,
   screen,
 } = require('electron');
 
 const configMod = require('./config');
 const netinfo = require('./netinfo');
+const netbind = require('./net/netbind');
 const crypto = require('./net/crypto');
 const { Layout } = require('./layout');
 const { getBackend } = require('./input');
@@ -28,7 +31,7 @@ const { ServerCore, ClientCore } = require('./core');
 // which leaves the Electron app APIs undefined.
 if (!app || typeof app.whenReady !== 'function') {
   console.error(
-    'Cursorkeyshare must be started via Electron, not plain Node.\n' +
+    'CursorKeyShare must be started via Electron, not plain Node.\n' +
       'If you see this, ELECTRON_RUN_AS_NODE is likely set in your environment.\n' +
       'Unset it and run `npm start`.'
   );
@@ -36,6 +39,19 @@ if (!app || typeof app.whenReady !== 'function') {
 }
 
 const isDev = process.argv.includes('--dev');
+
+// Keep networking + timers alive when the window is minimized/backgrounded.
+// Chromium throttles (and can freeze) hidden/occluded windows, which drops the
+// share connection while minimized — reported on Windows. These must be set
+// before the app is ready.
+app.commandLine.appendSwitch('disable-background-timer-throttling');
+app.commandLine.appendSwitch('disable-renderer-backgrounding');
+app.commandLine.appendSwitch('disable-backgrounding-occluded-windows');
+// Windows: stop Chromium's native occlusion detection from hard-freezing the
+// renderer (UI/IPC) when the window is minimized/occluded — a well-known cause
+// of "the app dies when minimized" on Windows. (Doesn't affect the main-process
+// sockets, which the liveness watchdogs handle.)
+app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion');
 
 const state = {
   cfg: null,
@@ -49,7 +65,25 @@ const state = {
   win: null,
   tray: null,
   lastError: null,
+  powerSaveId: null,
 };
+
+// Prevent the OS from suspending the app (and its sockets/hooks) while sharing.
+function startPowerSaveBlocker() {
+  try {
+    if (state.powerSaveId == null || !powerSaveBlocker.isStarted(state.powerSaveId)) {
+      state.powerSaveId = powerSaveBlocker.start('prevent-app-suspension');
+    }
+  } catch {}
+}
+function stopPowerSaveBlocker() {
+  try {
+    if (state.powerSaveId != null && powerSaveBlocker.isStarted(state.powerSaveId)) {
+      powerSaveBlocker.stop(state.powerSaveId);
+    }
+  } catch {}
+  state.powerSaveId = null;
+}
 
 // ---- desktop bounds --------------------------------------------------------
 
@@ -114,6 +148,10 @@ function startEngine() {
   );
   registerLocalNode();
 
+  // Which NIC to pin sockets to so LAN traffic bypasses a full-tunnel VPN.
+  const bindIf = netinfo.resolveBindInterface(state.cfg.bindInterface);
+  if (bindIf) log(`network pinned to ${bindIf} (bypasses VPN for LAN peers)`);
+
   if (state.cfg.role === 'server') {
     const server = new NetServer({
       key,
@@ -121,6 +159,7 @@ function startEngine() {
       udpPort: state.cfg.udpPort,
       name: state.cfg.name,
       localId: state.cfg.localId,
+      bindIf,
     });
     wireServerEvents(server);
     server.start();
@@ -151,6 +190,7 @@ function startEngine() {
       name: state.cfg.name,
       localId: state.cfg.localId,
       bounds: localBounds(),
+      bindIf,
     });
     wireClientEvents(client);
     state.client = client;
@@ -173,6 +213,12 @@ function startEngine() {
   }
 
   state.running = true;
+  startPowerSaveBlocker();
+  // Opt the process out of Windows EcoQoS/efficiency throttling while sharing, so
+  // main-process timers and the native hook thread keep full-speed scheduling
+  // when minimized (prevents the low-level hook from being silently unhooked for
+  // exceeding its timeout). No-op off Windows.
+  try { if (state.backend && state.backend.setProcessResponsive) state.backend.setProcessResponsive(true); } catch {}
   pushStatus();
   updateTray();
   return true;
@@ -184,6 +230,8 @@ function stopEngine() {
   if (state.client) try { state.client.stop(); } catch {}
   state.core = state.server = state.client = null;
   state.running = false;
+  stopPowerSaveBlocker();
+  try { if (state.backend && state.backend.setProcessResponsive) state.backend.setProcessResponsive(false); } catch {}
   state.activeId = state.cfg ? state.cfg.localId : null;
   updateTray();
   pushStatus();
@@ -279,11 +327,12 @@ function createWindow() {
     height: 680,
     minWidth: 720,
     minHeight: 520,
-    title: 'Cursorkeyshare',
+    title: 'CursorKeyShare',
     webPreferences: {
       preload: path.join(__dirname, '../renderer/preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
+      backgroundThrottling: false, // don't throttle when minimized (keeps sharing alive)
     },
   });
   state.win.loadFile(path.join(__dirname, '../renderer/index.html'));
@@ -313,14 +362,14 @@ function trayIcon() {
 function updateTray() {
   if (!state.tray) return;
   const menu = Menu.buildFromTemplate([
-    { label: 'Cursorkeyshare', enabled: false },
+    { label: 'CursorKeyShare', enabled: false },
     { type: 'separator' },
     { label: state.running ? 'Stop sharing' : 'Start sharing', click: () => (state.running ? stopEngine() : startEngine()) },
     { label: 'Open configuration', click: () => { state.win.show(); } },
     { type: 'separator' },
     { label: 'Quit', click: () => { app.isQuitting = true; app.quit(); } },
   ]);
-  state.tray.setToolTip(`Cursorkeyshare — ${state.running ? 'running' : 'stopped'}`);
+  state.tray.setToolTip(`CursorKeyShare — ${state.running ? 'running' : 'stopped'}`);
   state.tray.setContextMenu(menu);
 }
 
@@ -340,11 +389,45 @@ function publicConfig() {
     // Live, auto-detected values the UI surfaces (never persisted as config).
     detectedName: netinfo.detectName(),
     localIPs: netinfo.detectLocalIPv4s(),
+    interfaces: netinfo.rankedInterfaces(), // [{name, address}] best-first
+    bindAvailable: netbind.available(), // can we actually pin to a NIC?
   };
 }
 
 function registerIpc() {
   ipcMain.handle('config:get', () => publicConfig());
+
+  // Diagnose LAN reachability to a peer, WITH and WITHOUT interface pinning, so
+  // the user can see whether VPN-bypass is working — or whether their VPN is the
+  // unbeatable includeAllNetworks kind (both fail).
+  ipcMain.handle('net:testReach', async (_e, { host }) => {
+    const target = (host || '').trim().replace(/:\d+$/, '');
+    const port = state.cfg.tcpPort || 24800;
+    const ifName = netinfo.resolveBindInterface(state.cfg.bindInterface);
+    if (!target) return { ok: false, error: 'Enter the other machine’s address first.' };
+
+    const plain = () =>
+      new Promise((res) => {
+        const s = net.connect({ host: target, port });
+        const done = (v) => { try { s.destroy(); } catch {} res(v); };
+        s.setTimeout(2500, () => done(false));
+        s.once('connect', () => done(true));
+        s.once('error', () => done(false));
+      });
+    const scoped = async () => {
+      if (!ifName || !netbind.available()) return null; // pinning n/a
+      try {
+        const s = await netbind.connectBoundTcp(target, port, ifName, 2500);
+        try { s.destroy(); } catch {}
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    const unscoped = await plain();
+    const bound = await scoped();
+    return { ok: true, host: target, port, ifName, unscoped, scoped: bound };
+  });
 
   ipcMain.handle('config:set', (_e, patch) => {
     const wasRunning = state.running;

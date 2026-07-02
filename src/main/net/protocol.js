@@ -1,5 +1,5 @@
 'use strict';
-// Cursorkeyshare wire protocol.
+// CursorKeyShare wire protocol.
 //
 // Every message is a single "packet" whose plaintext is:
 //     [ type(1) | payload(n) ]
