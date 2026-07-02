@@ -47,6 +47,11 @@ const isDev = process.argv.includes('--dev');
 app.commandLine.appendSwitch('disable-background-timer-throttling');
 app.commandLine.appendSwitch('disable-renderer-backgrounding');
 app.commandLine.appendSwitch('disable-backgrounding-occluded-windows');
+// Windows: stop Chromium's native occlusion detection from hard-freezing the
+// renderer (UI/IPC) when the window is minimized/occluded — a well-known cause
+// of "the app dies when minimized" on Windows. (Doesn't affect the main-process
+// sockets, which the liveness watchdogs handle.)
+app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion');
 
 const state = {
   cfg: null,
@@ -209,6 +214,11 @@ function startEngine() {
 
   state.running = true;
   startPowerSaveBlocker();
+  // Opt the process out of Windows EcoQoS/efficiency throttling while sharing, so
+  // main-process timers and the native hook thread keep full-speed scheduling
+  // when minimized (prevents the low-level hook from being silently unhooked for
+  // exceeding its timeout). No-op off Windows.
+  try { if (state.backend && state.backend.setProcessResponsive) state.backend.setProcessResponsive(true); } catch {}
   pushStatus();
   updateTray();
   return true;
@@ -221,6 +231,7 @@ function stopEngine() {
   state.core = state.server = state.client = null;
   state.running = false;
   stopPowerSaveBlocker();
+  try { if (state.backend && state.backend.setProcessResponsive) state.backend.setProcessResponsive(false); } catch {}
   state.activeId = state.cfg ? state.cfg.localId : null;
   updateTray();
   pushStatus();

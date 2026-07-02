@@ -33,6 +33,7 @@ class NetClient extends EventEmitter {
     this._reader = new FrameReader();
     this._reconnectTimer = null;
     this._pingTimer = null;
+    this._lastRx = 0; // ms of last inbound TCP traffic (liveness watchdog)
     this._lastMoveSeq = 0;
     this._stopped = false;
     this.connected = false;
@@ -90,6 +91,8 @@ class NetClient extends EventEmitter {
     const sock = this._sock;
     if (!sock) return;
     sock.setNoDelay(true);
+    sock.setKeepAlive(true, 5000); // OS-level probes; slow, backed up by the watchdog below
+    this._lastRx = Date.now(); // liveness baseline — refreshed on every inbound chunk
     this.connected = true;
     this._reader = new FrameReader();
     this.emit('connected', { host: this.host, port: this.tcpPort });
@@ -107,12 +110,21 @@ class NetClient extends EventEmitter {
     this._pingTimer = setInterval(() => {
       this._sendTcp(proto.encodeJson(proto.T.PING, { t: Date.now() }));
       this._registerUdp();
+      // Dead-peer detection. A half-open TCP socket (common after the OS throttles
+      // or briefly suspends a minimized app) never fires 'close', so pings write
+      // into a void and we'd sit here forever. If no traffic has arrived for 3+
+      // missed pings, force-close so the 'close' handler reconnects.
+      if (this._lastRx && Date.now() - this._lastRx > 7000) {
+        this.emit('warn', 'no server traffic for 7s — recycling connection');
+        try { if (this._sock) this._sock.destroy(); } catch {}
+      }
     }, 2000);
   }
 
   // Attach data/error/close handlers to a connected socket.
   _wire(sock) {
     sock.on('data', (chunk) => {
+      this._lastRx = Date.now(); // any inbound byte = the link is alive
       let blobs;
       try {
         blobs = this._reader.push(chunk);

@@ -25,6 +25,10 @@
 #include <string>
 #endif
 
+#if defined(_WIN32)
+#include <windows.h>
+#endif
+
 namespace {
 
 Napi::ThreadSafeFunction g_tsfn;
@@ -231,6 +235,28 @@ Napi::Value ConnectBoundTcp(const Napi::CallbackInfo& info) {
   return def.Promise();
 }
 
+// setProcessResponsive(on) -> bool. On Windows, opt the process out of (on=true)
+// EcoQoS / "efficiency mode" CPU throttling so main-process timers and the
+// low-level hook thread keep full-speed scheduling while the window is
+// minimized — otherwise the hook proc can exceed LowLevelHooksTimeout and
+// Windows silently unhooks it (input capture just stops). No-op elsewhere.
+Napi::Value SetProcessResponsive(const Napi::CallbackInfo& info) {
+  Napi::Env env = info.Env();
+#if defined(_WIN32)
+  bool on = info.Length() > 0 ? info[0].ToBoolean().Value() : true;
+  PROCESS_POWER_THROTTLING_STATE state;
+  ZeroMemory(&state, sizeof(state));
+  state.Version = PROCESS_POWER_THROTTLING_CURRENT_VERSION;
+  state.ControlMask = PROCESS_POWER_THROTTLING_EXECUTION_SPEED;
+  state.StateMask = on ? 0 : PROCESS_POWER_THROTTLING_EXECUTION_SPEED; // 0 => full speed
+  BOOL ok = SetProcessInformation(GetCurrentProcess(), ProcessPowerThrottling, &state, sizeof(state));
+  return Napi::Boolean::New(env, ok == TRUE);
+#else
+  (void)info;
+  return Napi::Boolean::New(env, true);
+#endif
+}
+
 Napi::Object Init(Napi::Env env, Napi::Object exports) {
   exports.Set("startCapture", Napi::Function::New(env, StartCapture));
   exports.Set("stopCapture", Napi::Function::New(env, StopCapture));
@@ -243,6 +269,7 @@ Napi::Object Init(Napi::Env env, Napi::Object exports) {
   exports.Set("getCursorPos", Napi::Function::New(env, GetCursorPos));
   exports.Set("bindToInterface", Napi::Function::New(env, BindToInterface));
   exports.Set("connectBoundTcp", Napi::Function::New(env, ConnectBoundTcp));
+  exports.Set("setProcessResponsive", Napi::Function::New(env, SetProcessResponsive));
   return exports;
 }
 

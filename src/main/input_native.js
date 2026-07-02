@@ -109,6 +109,14 @@ class NativeBackend extends EventEmitter {
       return { x: 0, y: 0 };
     }
   }
+  // Windows: keep the process off EcoQoS throttling while sharing (no-op elsewhere).
+  setProcessResponsive(on) {
+    try {
+      return !!(this._n.setProcessResponsive && this._n.setProcessResponsive(!!on));
+    } catch {
+      return false;
+    }
+  }
 }
 
 // addon button ids: 1=left,2=right,3=middle (matches our BUTTON enum directly)
