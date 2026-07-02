@@ -135,6 +135,19 @@ variables): `CSC_LINK` (base64 of a *Developer ID Application* `.p12`),
 `CSC_KEY_PASSWORD`, `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`, `APPLE_TEAM_ID`.
 Notarization runs only when both the signing cert and Team ID are present.
 
+**Keeping macOS permissions across rebuilds.** An unsigned build gets a new code
+identity every time, so macOS forgets the Accessibility / Input Monitoring grant
+on each reinstall and re-prompts. If you don't have an Apple Developer account,
+run this once to create a stable self-signed identity:
+
+```bash
+bash scripts/make-signing-cert.sh   # one-time; authenticate when asked
+```
+
+`build-mac.sh` then signs every build with it, so the permission sticks across
+rebuilds. (The app still isn't notarized, so clear quarantine on first launch as
+above.)
+
 ### CI (recommended — this is the "build on a Mac" path)
 
 - **GitLab** (`.gitlab-ci.yml`): builds on a hosted Apple-silicon runner
@@ -183,6 +196,12 @@ explicitly want the built apps in the repo.)
    to match your physical arrangement; edges snap together. Positions are saved.
 4. Move your mouse off the matching edge to jump to the next machine. Type/click
    normally. Press **Ctrl/Cmd+Alt+Home** to yank control back to the server.
+
+> **On a VPN?** If a machine sits on a full-tunnel VPN that hides the local
+> network, set **Network interface** to the LAN adapter so the app's traffic
+> bypasses the tunnel. The default (*Auto*) already prefers the LAN NIC over
+> VPN/virtual ones, and the **Check connectivity** button reports whether a peer
+> is actually reachable.
 
 ## Input backends
 
