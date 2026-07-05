@@ -43,19 +43,6 @@ function clamp(v, lo, hi) {
   return v < lo ? lo : v > hi ? hi : v;
 }
 
-const EDGE = 2; // px tolerance for "cursor is against a screen edge"
-// Hysteresis: after crossing a shared edge we place the cursor this many px
-// INSIDE the destination, away from that edge. Without it the cursor lands
-// exactly on the boundary and the slightest reverse delta (hand jitter) — or the
-// edge it returns onto — re-triggers the opposite crossing, so control flaps
-// between the two machines. MARGIN must comfortably exceed mouse jitter (~1-3px)
-// and the EDGE trigger zone.
-const MARGIN = 16;
-
-function clamp(v, lo, hi) {
-  return v < lo ? lo : v > hi ? hi : v;
-}
-
 class ServerCore extends EventEmitter {
   constructor({ layout, backend, server, config }) {
     super();
