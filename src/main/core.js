@@ -20,8 +20,17 @@
 // ClientCore runs on a controlled machine: it injects whatever input arrives.
 
 const EventEmitter = require('events');
+const keymap = require('./keymap');
 
 const EDGE = 2; // px tolerance for "cursor is against a screen edge"
+
+// Canonical codes for the Cmd->Ctrl remap (see ServerCore._onKey).
+const CANON = {
+  METAL: keymap.nameToCanon('MetaLeft'),
+  METAR: keymap.nameToCanon('MetaRight'),
+  CTRLL: keymap.nameToCanon('ControlLeft'),
+  CTRLR: keymap.nameToCanon('ControlRight'),
+};
 // Hysteresis: after crossing a shared edge we place the cursor this many px
 // INSIDE the destination, away from that edge. Without it the cursor lands
 // exactly on the boundary and the slightest reverse delta (hand jitter) — or the
@@ -242,7 +251,16 @@ class ServerCore extends EventEmitter {
 
   _onKey(e, down) {
     if (this.controllingRemote && e.canon >= 0) {
-      this.server.sendKey(this.activeId, down, e.canon, e.rawcode || 0, e.modifiers || 0);
+      let canon = e.canon;
+      // Send Cmd as Ctrl (default on): matches Mac muscle memory on Windows
+      // clients (Cmd+C -> Ctrl+C) and avoids the Win-key trap where Cmd+L
+      // locks the client's workstation — which strands the KVM, since injected
+      // input can't reach the secure desktop to unlock it.
+      if (this.config.cmdSendsCtrl !== false) {
+        if (canon === CANON.METAL) canon = CANON.CTRLL;
+        else if (canon === CANON.METAR) canon = CANON.CTRLR;
+      }
+      this.server.sendKey(this.activeId, down, canon, e.rawcode || 0, e.modifiers || 0);
     }
   }
 
@@ -269,15 +287,40 @@ class ClientCore extends EventEmitter {
     super();
     this.backend = backend;
     this.client = client;
+    this._held = new Set(); // canonical codes currently injected as down
+    this._heldButtons = new Set(); // mouse buttons currently injected as down
   }
 
   start() {
     const c = this.client;
     c.on('mousemove', ({ x, y }) => this.backend.injectMouseMoveAbs(x, y));
-    c.on('mousebutton', ({ button, down }) => this.backend.injectMouseButton(button, down));
+    c.on('mousebutton', ({ button, down }) => {
+      if (down) this._heldButtons.add(button);
+      else this._heldButtons.delete(button);
+      this.backend.injectMouseButton(button, down);
+    });
     c.on('wheel', ({ dx, dy }) => this.backend.injectWheel(dx, dy));
-    c.on('key', ({ down, canon }) => this.backend.injectKey(down, canon));
+    c.on('key', ({ down, canon }) => {
+      if (down) this._held.add(canon);
+      else this._held.delete(canon);
+      this.backend.injectKey(down, canon);
+    });
     c.on('enter', ({ x, y }) => this.backend.warpCursor(x, y));
+    // When control leaves this machine (or the link drops), release everything
+    // still held — a key or button pressed while crossing (Ctrl, a drag) would
+    // otherwise stay stuck down here and garble all local input.
+    const releaseAll = () => {
+      for (const canon of this._held) {
+        try { this.backend.injectKey(false, canon); } catch {}
+      }
+      this._held.clear();
+      for (const button of this._heldButtons) {
+        try { this.backend.injectMouseButton(button, false); } catch {}
+      }
+      this._heldButtons.clear();
+    };
+    c.on('leave', releaseAll);
+    c.on('disconnected', releaseAll);
     c.start();
   }
 

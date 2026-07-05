@@ -6,7 +6,7 @@
   "license": "MIT",
   "main": "src/main/main.js",
   "scripts": {
-    "test": "node test/edge-crossing.js && node test/netinfo.js && node test/net-liveness.js",
+    "test": "node test/edge-crossing.js && node test/netinfo.js && node test/net-liveness.js && node test/client-core.js",
     "start": "electron .",
     "dev": "electron . --dev",
     "build:native": "node-gyp rebuild",

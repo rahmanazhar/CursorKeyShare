@@ -43,7 +43,7 @@ const MAC = {
   BracketRight: 30, O: 31, U: 32, BracketLeft: 33, I: 34, P: 35, Enter: 36,
   L: 37, J: 38, Quote: 39, K: 40, Semicolon: 41, Backslash: 42, Comma: 43,
   Slash: 44, N: 45, M: 46, Period: 47, Tab: 48, Space: 49, Backquote: 50,
-  Backspace: 51, Escape: 53, MetaLeft: 55, ShiftLeft: 56, CapsLock: 57,
+  Backspace: 51, Escape: 53, MetaRight: 54, MetaLeft: 55, ShiftLeft: 56, CapsLock: 57,
   AltLeft: 58, ControlLeft: 59, ShiftRight: 60, AltRight: 61, ControlRight: 62,
   F17: 64, NumpadDecimal: 65, NumpadMultiply: 67, NumpadAdd: 69, NumLock: 71,
   NumpadDivide: 75, NumpadEnter: 76, NumpadSubtract: 78, F18: 79, F19: 80,
