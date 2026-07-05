@@ -35,6 +35,7 @@ const DEFAULTS = () => ({
   passphrasePlain: null, // fallback when safeStorage unavailable (dev only)
   autoConnect: false,
   switchToClipboard: true,
+  cmdSendsCtrl: true, // server: forward Cmd as Ctrl (Mac muscle memory; avoids Win+L lock trap)
   edgeGuardMs: 80, // dwell time at an edge before crossing (anti-accidental)
   positions: {}, // { [machineId]: { name, layoutX, layoutY } }
   localId: null, // stable id for this machine

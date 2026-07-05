@@ -18,7 +18,7 @@ let status = { running: false };
 // ---- settings form ---------------------------------------------------------
 
 const FIELDS = ['name', 'role', 'serverHost', 'group', 'tcpPort', 'udpPort', 'edgeGuardMs'];
-const CHECKS = ['switchToClipboard', 'autoConnect'];
+const CHECKS = ['switchToClipboard', 'autoConnect', 'cmdSendsCtrl'];
 
 async function loadConfig() {
   cfg = await api.getConfig();
@@ -36,6 +36,7 @@ async function loadConfig() {
   el('udpPort').value = cfg.udpPort || 24801;
   el('edgeGuardMs').value = cfg.edgeGuardMs ?? 80;
   el('switchToClipboard').checked = !!cfg.switchToClipboard;
+  el('cmdSendsCtrl').checked = cfg.cmdSendsCtrl !== false; // default on
   el('autoConnect').checked = !!cfg.autoConnect;
   el('passphrase').placeholder = cfg.hasPassphrase ? '•••••••• (unchanged)' : 'set a passphrase';
   populateInterfaces();
@@ -97,6 +98,7 @@ async function saveConfig() {
     udpPort: parseInt(el('udpPort').value, 10) || 24801,
     edgeGuardMs: parseInt(el('edgeGuardMs').value, 10) || 0,
     switchToClipboard: el('switchToClipboard').checked,
+    cmdSendsCtrl: el('cmdSendsCtrl').checked,
     autoConnect: el('autoConnect').checked,
     bindInterface: el('bindInterface').value,
   };

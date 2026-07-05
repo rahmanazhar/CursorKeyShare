@@ -266,6 +266,9 @@ function wireServerEvents(server) {
     pushStatus();
   });
   server.on('clipboard', ({ from, format, data }) => {
+    // Respect this machine's own opt-out: don't take or relay client clipboards
+    // when clipboard sharing is disabled here.
+    if (!state.cfg.switchToClipboard) return;
     if (format === 'text') clipboard.writeText(data);
     server.broadcastClipboard(format, data, from);
   });
@@ -277,8 +280,26 @@ function wireClientEvents(client) {
   client.on('connected', () => log('connected to server'));
   client.on('welcome', (w) => log(`welcomed by ${w.name}`));
   client.on('disconnected', () => log('disconnected; retrying...'));
+  // Remember the last text the server pushed to us, so we don't echo it
+  // straight back when control leaves this machine.
+  let lastFromServer = null;
   client.on('clipboard', ({ format, data }) => {
-    if (format === 'text') clipboard.writeText(data);
+    if (format === 'text') {
+      lastFromServer = data;
+      clipboard.writeText(data);
+    }
+  });
+  // When control moves away, push whatever was copied HERE back to the server
+  // (which writes it locally and relays to the other machines). This is the
+  // client->server half of clipboard sync; the server->client half is pushed
+  // on switch in wireServerEvents.
+  client.on('leave', () => {
+    if (!state.cfg.switchToClipboard) return;
+    const text = clipboard.readText();
+    if (text && text !== lastFromServer) {
+      lastFromServer = text; // also guards a repeat leave with unchanged text
+      client.sendClipboard('text', text);
+    }
   });
   client.on('warn', (m) => log('warn: ' + m));
   client.on('error', (e) => log('error: ' + String(e.message || e)));

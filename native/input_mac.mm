@@ -18,6 +18,7 @@
 #import <ApplicationServices/ApplicationServices.h>
 #import <CoreGraphics/CoreGraphics.h>
 #import <CoreFoundation/CoreFoundation.h>
+#import <IOKit/hidsystem/IOLLEvent.h>  // NX_DEVICE*KEYMASK per-side modifier bits
 #include <atomic>
 #include <cstdint>
 #include <future>
@@ -44,6 +45,25 @@ unsigned int ModsFromFlags(CGEventFlags f) {
   if (f & kCGEventFlagMaskAlternate) m |= 4;
   if (f & kCGEventFlagMaskCommand) m |= 8;
   return m;
+}
+
+// Modifier keys on macOS never produce kCGEventKeyDown/KeyUp — only
+// kCGEventFlagsChanged. To forward them like normal keys we map the keycode of
+// the changed modifier to its DEVICE-side flag bit (from IOLLEvent.h), whose
+// presence tells us down vs up. The device bits distinguish left/right keys,
+// which the generic kCGEventFlagMask* bits (shared by both sides) cannot.
+uint64_t DeviceBitForModifierKeycode(unsigned int keycode) {
+  switch (keycode) {
+    case 59: return NX_DEVICELCTLKEYMASK;    // kVK_Control
+    case 62: return NX_DEVICERCTLKEYMASK;    // kVK_RightControl
+    case 56: return NX_DEVICELSHIFTKEYMASK;  // kVK_Shift
+    case 60: return NX_DEVICERSHIFTKEYMASK;  // kVK_RightShift
+    case 58: return NX_DEVICELALTKEYMASK;    // kVK_Option
+    case 61: return NX_DEVICERALTKEYMASK;    // kVK_RightOption
+    case 55: return NX_DEVICELCMDKEYMASK;    // kVK_Command
+    case 54: return NX_DEVICERCMDKEYMASK;    // kVK_RightCommand
+    default: return 0;  // CapsLock / Fn etc.: leave to the OS untouched
+  }
 }
 
 CGEventRef TapCallback(CGEventTapProxy proxy, CGEventType type, CGEventRef event, void* refcon) {
@@ -101,6 +121,19 @@ CGEventRef TapCallback(CGEventTapProxy proxy, CGEventType type, CGEventRef event
       g_cb(ev); handled = true;
       break;
     }
+    case kCGEventFlagsChanged: {
+      // A modifier key went down or up. Which key: the event's keycode field.
+      // Down or up: whether that key's device-side bit is set in the new flags.
+      unsigned int keycode = (unsigned int)CGEventGetIntegerValueField(event, kCGKeyboardEventKeycode);
+      uint64_t bit = DeviceBitForModifierKeycode(keycode);
+      if (bit == 0) break;  // CapsLock/Fn — pass through, never suppress
+      CGEventFlags flags = CGEventGetFlags(event);
+      ev.type = (flags & bit) ? InputEvent::KeyDown : InputEvent::KeyUp;
+      ev.keycode = keycode;
+      ev.modifiers = ModsFromFlags(flags);
+      g_cb(ev); handled = true;
+      break;
+    }
     default: break;
   }
 
@@ -116,7 +149,7 @@ void ThreadMain(std::promise<bool>* ready) {
       CGEventMaskBit(kCGEventRightMouseDown) | CGEventMaskBit(kCGEventRightMouseUp) |
       CGEventMaskBit(kCGEventOtherMouseDown) | CGEventMaskBit(kCGEventOtherMouseUp) |
       CGEventMaskBit(kCGEventScrollWheel) | CGEventMaskBit(kCGEventKeyDown) |
-      CGEventMaskBit(kCGEventKeyUp);
+      CGEventMaskBit(kCGEventKeyUp) | CGEventMaskBit(kCGEventFlagsChanged);
 
   g_tap = CGEventTapCreate(kCGSessionEventTap, kCGHeadInsertEventTap,
                            kCGEventTapOptionDefault, mask, TapCallback, nullptr);
