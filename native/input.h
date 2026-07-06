@@ -26,4 +26,7 @@ void InjectWheel(int dx, int dy);
 void InjectKey(bool down, unsigned int osKeycode);
 void WarpCursor(int x, int y);
 void GetCursorPos(int* x, int* y);
+// Hide/show the local cursor while a remote machine is being controlled.
+// macOS: real hide (even from a background app). Windows: no-op.
+void SetCursorVisible(bool visible);
 }  // namespace platform

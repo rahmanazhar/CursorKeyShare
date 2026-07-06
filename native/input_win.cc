@@ -211,6 +211,10 @@ void InjectKey(bool down, unsigned int osKeycode) {
 
 void WarpCursor(int x, int y) { SetCursorPos(x, y); }
 
+// No-op: only the server parks-and-hides its cursor, and Windows-as-server
+// hides nothing today (ShowCursor(FALSE) is per-thread and app-local anyway).
+void SetCursorVisible(bool) {}
+
 void GetCursorPos(int* x, int* y) {
   POINT pt; ::GetCursorPos(&pt); *x = pt.x; *y = pt.y;
 }

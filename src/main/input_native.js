@@ -102,6 +102,12 @@ class NativeBackend extends EventEmitter {
   warpCursor(x, y) {
     this._n.warpCursor(Math.round(x), Math.round(y));
   }
+  // Hide/show the local cursor (server side, while controlling a remote).
+  setCursorVisible(visible) {
+    try {
+      if (this._n.setCursorVisible) this._n.setCursorVisible(!!visible);
+    } catch {}
+  }
   async getCursorPos() {
     try {
       return this._n.getCursorPos();

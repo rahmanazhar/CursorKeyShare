@@ -262,6 +262,13 @@ function wireServerEvents(server) {
   server.on('peer-disconnected', (id) => {
     state.layout.setOnline(id, false);
     log(`peer disconnected: ${id}`);
+    // If that was the machine being controlled, snap control back here —
+    // otherwise this machine sits with input suppressed and the cursor hidden,
+    // looking completely hung.
+    if (state.core && state.core.remoteId === id && state.core.releaseToLocal) {
+      state.core.releaseToLocal();
+      log('control returned to this machine (controlled peer went offline)');
+    }
     pushLayout();
     pushStatus();
   });
