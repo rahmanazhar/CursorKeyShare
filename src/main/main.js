@@ -148,8 +148,11 @@ function startEngine() {
   );
   registerLocalNode();
 
-  // Which NIC to pin sockets to so LAN traffic bypasses a full-tunnel VPN.
-  const bindIf = netinfo.resolveBindInterface(state.cfg.bindInterface);
+  // Which NIC to pin sockets to so LAN traffic bypasses a full-tunnel VPN. For a
+  // client, prefer the NIC on the server's subnet — that reliably picks the
+  // physical LAN NIC over a VPN tunnel (e.g. CloudflareWARP) even in "auto".
+  const bindPeer = state.cfg.role === 'client' ? state.cfg.serverHost : null;
+  const bindIf = netinfo.resolveBindInterface(state.cfg.bindInterface, bindPeer);
   if (bindIf) log(`network pinned to ${bindIf} (bypasses VPN for LAN peers)`);
 
   if (state.cfg.role === 'server') {

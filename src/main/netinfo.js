@@ -10,9 +10,12 @@
 
 const os = require('os');
 
-// Interface-name prefixes that are almost never the LAN address to hand a peer:
-// VPN tunnels (utun/tun/tap/ppp), AirDrop/AWDL, bridges, and VM/container NICs.
-const VIRTUAL = /^(utun|tun|tap|ppp|awdl|llw|anpi|ap\d|bridge|vmnet|vboxnet|docker|veth|gif|stf|ham)/i;
+// Interface-name fragments that are almost never the LAN address to hand a peer:
+// VPN tunnels (utun/tun/tap/ppp/wireguard/WARP/Tailscale/ZeroTier/commercial
+// VPNs), AirDrop/AWDL, bridges, and VM/container NICs. Matched anywhere in the
+// name (not just the prefix) so Windows adapter names like "CloudflareWARP" and
+// "OpenVPN TAP-Windows" are caught too.
+const VIRTUAL = /(utun|tun\d|tap|ppp|awdl|llw|anpi|ap\d|bridge|vmnet|vboxnet|docker|veth|gif|stf|ham|cloudflare|warp|wireguard|wg\d|tailscale|zerotier|^zt|nordlynx|proton|mullvad|expressvpn|windscribe|wintun|openvpn)/i;
 
 function isPrivateLan(ip) {
   return (
@@ -25,15 +28,30 @@ function isLinkLocal(ip) {
   return /^169\.254\./.test(ip); // self-assigned; only reachable as a last resort
 }
 
-// All non-internal IPv4 interfaces, as { name, address }.
+// All non-internal IPv4 interfaces, as { name, address, netmask }.
 function candidates() {
   const out = [];
   for (const [name, addrs] of Object.entries(os.networkInterfaces())) {
     for (const a of addrs || []) {
-      if (a.family === 'IPv4' && !a.internal) out.push({ name, address: a.address });
+      if (a.family === 'IPv4' && !a.internal) {
+        out.push({ name, address: a.address, netmask: a.netmask });
+      }
     }
   }
   return out;
+}
+
+// Is `ip` on the same IPv4 subnet as `address`/`netmask`?
+function sameSubnet(ip, address, netmask) {
+  if (!ip || !address || !netmask) return false;
+  const toInt = (s) => {
+    const p = String(s).split('.');
+    if (p.length !== 4) return null;
+    return ((+p[0] << 24) | (+p[1] << 16) | (+p[2] << 8) | +p[3]) >>> 0;
+  };
+  const a = toInt(address), m = toInt(netmask), t = toInt(ip);
+  if (a == null || m == null || t == null) return false;
+  return ((a & m) >>> 0) === ((t & m) >>> 0);
 }
 
 // Lower score = better candidate. This ordering is the one real judgment call
@@ -68,17 +86,28 @@ function bestInterface() {
  * Resolve the config `bindInterface` setting to the NIC name to scope sockets
  * to, or null for "use normal OS routing".
  *   'off'        -> null (don't bind)
- *   'auto' | ''  -> best detected LAN NIC name
- *   '<name>'     -> that name if it currently exists, else best (don't strand
- *                   the user on a NIC that went away)
+ *   'auto' | ''  -> the NIC on the peer's subnet if known, else best LAN NIC
+ *   '<name>'     -> that name if it currently exists, else fall through to auto
+ *                   (don't strand the user on a NIC that went away)
+ *
+ * @param {string} setting  the configured bindInterface value
+ * @param {string} [peerIp] the address we're connecting to (client role); when
+ *                          given, an interface on that peer's subnet wins — this
+ *                          reliably picks the physical LAN NIC over a VPN tunnel.
  */
-function resolveBindInterface(setting) {
+function resolveBindInterface(setting, peerIp) {
   if (setting === 'off') return null;
   const ranked = rankedInterfaces();
   if (!ranked.length) return null;
-  if (!setting || setting === 'auto') return ranked[0].name;
-  const match = ranked.find((c) => c.name === setting);
-  return match ? match.name : ranked[0].name;
+  if (setting && setting !== 'auto') {
+    const match = ranked.find((c) => c.name === setting);
+    if (match) return match.name;
+  }
+  if (peerIp) {
+    const onSubnet = ranked.find((c) => sameSubnet(peerIp, c.address, c.netmask));
+    if (onSubnet) return onSubnet.name;
+  }
+  return ranked[0].name;
 }
 
 // Hostname without the noisy mDNS ".local" suffix macOS appends.
