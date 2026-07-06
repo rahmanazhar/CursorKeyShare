@@ -8,8 +8,48 @@
 
 const net = require('net');
 const { loadAddon } = require('../input_native');
+const netinfo = require('../netinfo');
 
 const addon = loadAddon();
+
+/** The current IPv4 address of a NIC by name, or null. */
+function ipv4ForInterface(ifName) {
+  if (!ifName) return null;
+  const c = netinfo.rankedInterfaces().find((x) => x.name === ifName);
+  return c ? c.address : null;
+}
+
+/**
+ * Connect with the socket's SOURCE address bound to `localAddress` before the
+ * SYN. Node's net.createConnection binds localAddress prior to connect(), so a
+ * LAN peer is reached over that NIC's on-link route even when a full-tunnel VPN
+ * owns the default route. Resolves to a connected net.Socket.
+ */
+function connectViaLocalAddress(host, port, localAddress, timeoutMs) {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const sock = net.createConnection({ host, port, localAddress });
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      sock.destroy();
+      reject(new Error('connect timed out'));
+    }, timeoutMs);
+    sock.once('connect', () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(sock);
+    });
+    sock.once('error', (e) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      sock.destroy();
+      reject(e);
+    });
+  });
+}
 
 /** Is native interface binding available on this build/platform? */
 function available() {
@@ -43,11 +83,19 @@ function bindSocketToInterface(sock, ifName) {
  * way under a full-tunnel VPN). Resolves to a connected net.Socket.
  */
 async function connectBoundTcp(host, port, ifName, timeoutMs) {
-  if (!available() || typeof addon.connectBoundTcp !== 'function') {
-    throw new Error('native interface binding unavailable');
+  const timeout = timeoutMs || 4000;
+  // macOS: scope the socket to the NIC natively (IP_BOUND_IF) before the SYN —
+  // the strongest guarantee, works even for non-LAN destinations.
+  if (process.platform === 'darwin' && available() && typeof addon.connectBoundTcp === 'function') {
+    const fd = await addon.connectBoundTcp(host, port, ifName, timeout);
+    return new net.Socket({ fd, readable: true, writable: true });
   }
-  const fd = await addon.connectBoundTcp(host, port, ifName, timeoutMs || 4000);
-  return new net.Socket({ fd, readable: true, writable: true });
+  // Windows/Linux: no IP_BOUND_IF, so bind the source to the NIC's IPv4 address.
+  // Enough to keep a same-subnet LAN peer on that NIC's on-link route rather than
+  // a VPN that only hijacked the default route.
+  const localAddress = ipv4ForInterface(ifName);
+  if (!localAddress) throw new Error(`interface ${ifName} has no IPv4 address`);
+  return connectViaLocalAddress(host, port, localAddress, timeout);
 }
 
 module.exports = { available, bindSocketToInterface, connectBoundTcp };
