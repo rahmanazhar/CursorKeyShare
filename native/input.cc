@@ -62,6 +62,9 @@ void OnEvent(const InputEvent& ev) {
     o.Set("dy", Napi::Number::New(env, e->type == InputEvent::Wheel ? e->wheelY : e->dy));
     o.Set("keycode", Napi::Number::New(env, e->keycode));
     o.Set("modifiers", Napi::Number::New(env, e->modifiers));
+    o.Set("scancode", Napi::Number::New(env, e->scancode));
+    o.Set("extended", Napi::Boolean::New(env, e->extended));
+    o.Set("injected", Napi::Boolean::New(env, e->injected));
     jsCb.Call({o});
   });
   if (status != napi_ok) {
@@ -120,8 +123,9 @@ Napi::Value InjectWheel(const Napi::CallbackInfo& info) {
 }
 
 Napi::Value InjectKey(const Napi::CallbackInfo& info) {
+  bool extended = info.Length() > 2 && info[2].ToBoolean().Value();
   platform::InjectKey(info[0].ToBoolean().Value(),
-                      info[1].As<Napi::Number>().Uint32Value());
+                      info[1].As<Napi::Number>().Uint32Value(), extended);
   return info.Env().Undefined();
 }
 

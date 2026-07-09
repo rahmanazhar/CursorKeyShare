@@ -16,6 +16,11 @@ const WIN = {
   Y: 0x59, Z: 0x5a,
   Digit0: 0x30, Digit1: 0x31, Digit2: 0x32, Digit3: 0x33, Digit4: 0x34,
   Digit5: 0x35, Digit6: 0x36, Digit7: 0x37, Digit8: 0x38, Digit9: 0x39,
+  // NumpadEnter shares VK_RETURN with Enter on Windows (they're only told apart
+  // by the E0-extended bit, see WIN_EXTENDED below). Declared before Enter so
+  // Enter wins the reverse (capture) lookup in buildReverse — canonToOs still
+  // gets both directions fine since that map is keyed by canon, not OS code.
+  NumpadEnter: 0x0d,
   Enter: 0x0d, Escape: 0x1b, Backspace: 0x08, Tab: 0x09, Space: 0x20,
   Minus: 0xbd, Equal: 0xbb, BracketLeft: 0xdb, BracketRight: 0xdd,
   Backslash: 0xdc, Semicolon: 0xba, Quote: 0xde, Backquote: 0xc0,
@@ -89,4 +94,31 @@ function toOs(canonCode) {
   return v === undefined ? -1 : v;
 }
 
-module.exports = { fromOs, toOs, WIN, MAC };
+// Windows-only: keys whose real hardware scan code carries the E0 "extended"
+// prefix. SendInput must be told KEYEVENTF_EXTENDEDKEY for these or Windows
+// mishandles the injection: AltGr (right Alt) won't produce alt-gr characters,
+// the nav-cluster/arrow keys collide with their numpad twins (same make code,
+// distinguished only by E0), NumpadEnter is indistinguishable from Enter, and
+// low-level hooks that check the extended bit to tell left/right modifiers apart
+// see the wrong side.
+//
+// NOT extended (deliberately absent): NumLock — its real make code is 0x45 with
+// NO E0; the 0xE045 you see via MapVirtualKey(..._EX)/GetKeyNameText is a
+// reverse-map artifact, not the wire scancode (Pause is the E1-escape that shares
+// 0x45). Right Shift (0x36, not E0 — the "right-shift trap"). Numpad digits and
+// +,-,*,. (plain single-byte make codes). See MS "Extended-Key Flag" docs.
+const WIN_EXTENDED_NAMES = [
+  'ControlRight', 'AltRight', 'Insert', 'Delete', 'Home', 'End', 'PageUp', 'PageDown',
+  'ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'NumpadDivide', 'NumpadEnter',
+  'MetaLeft', 'MetaRight', 'PrintScreen',
+];
+const extendedCanonSet = new Set();
+for (const name of WIN_EXTENDED_NAMES) {
+  const c = keymap.nameToCanon(name);
+  if (c >= 0) extendedCanonSet.add(c);
+}
+function isExtended(canonCode) {
+  return !isMac && extendedCanonSet.has(canonCode);
+}
+
+module.exports = { fromOs, toOs, isExtended, WIN, MAC };

@@ -106,6 +106,9 @@ LRESULT CALLBACK KeyboardProc(int code, WPARAM wParam, LPARAM lParam) {
       InputEvent ev;
       ev.type = down ? InputEvent::KeyDown : InputEvent::KeyUp;
       ev.keycode = p->vkCode;
+      ev.scancode = p->scanCode;
+      ev.extended = (p->flags & LLKHF_EXTENDED) != 0;
+      ev.injected = (p->flags & LLKHF_INJECTED) != 0;
       ev.modifiers = CurrentModifiers();
       g_cb(ev);
       if (g_suppress.load()) return 1;
@@ -201,11 +204,52 @@ void InjectWheel(int dx, int dy) {
   }
 }
 
-void InjectKey(bool down, unsigned int osKeycode) {
+void InjectKey(bool down, unsigned int osKeycode, bool extended) {
   INPUT in = {};
   in.type = INPUT_KEYBOARD;
-  in.ki.wVk = (WORD)osKeycode;
-  in.ki.dwFlags = down ? 0 : KEYEVENTF_KEYUP;
+
+  // Numpad DIGITS (VK_NUMPAD0-9 = 0x60-0x69) and the numpad DECIMAL (VK_DECIMAL
+  // = 0x6E) are the only keys whose hardware scancode is dual-function: with the
+  // target's NumLock OFF, make codes 0x47/0x48/... resolve to Home/Up/... instead
+  // of 7/8/... We inject THESE by virtual-key, because VK_NUMPADn always yields
+  // the digit regardless of the target's NumLock state — which is what a KVM user
+  // typing numbers wants. That sidesteps the NumLock-sync machinery Synergy/Barrier
+  // need (and the numpad-acts-as-navigation bugs that plague them). The tradeoff:
+  // VK injection carries a zero scancode, so these specific keys are invisible to
+  // pure scancode/DirectInput consumers — acceptable, since numpad-as-movement in
+  // games is the navigation semantics anyway, and typing digits is the target use.
+  bool numpadDualFn = (osKeycode >= 0x60 && osKeycode <= 0x69) || osKeycode == 0x6E;
+
+  // Everything else goes by SCANCODE. VK injection leaves wScan=0, so consumers
+  // that read the hardware make code (Chromium/Electron KeyboardEvent.code,
+  // RawInput/DirectInput, SDL, many terminals) receive nothing identifiable —
+  // the root cause of "alternative keys don't work in some apps." Supplying the
+  // real make code (+ E0 for extended keys) makes injected keys look physical.
+  WORD scan;
+  if (numpadDualFn) {
+    scan = 0;
+  } else if (osKeycode == 0x2C) {
+    // VK_SNAPSHOT: MapVirtualKey returns 0x54 (the Alt+PrtSc "SysRq" make code),
+    // not PrintScreen's real 0x37. Override so it injects as E0 37.
+    scan = 0x37;
+  } else {
+    scan = (WORD)MapVirtualKey((UINT)osKeycode, MAPVK_VK_TO_VSC);
+  }
+
+  if (scan == 0) {
+    // Numpad dual-function keys (by design) or keys with no scancode mapping:
+    // fall back to virtual-key injection so the key still fires.
+    in.ki.wVk = (WORD)osKeycode;
+    in.ki.dwFlags = (down ? 0 : KEYEVENTF_KEYUP) | (extended ? KEYEVENTF_EXTENDEDKEY : 0);
+  } else {
+    in.ki.wVk = 0;  // scancode-driven: wVk must be zero
+    in.ki.wScan = scan;
+    // KEYEVENTF_SCANCODE must ride on the KEYUP too — dropping it on release is
+    // the classic stuck-key bug. E0 comes solely from the caller's extended flag
+    // (a corrected allow-list), never from MapVirtualKey's reverse-map artifacts.
+    in.ki.dwFlags = KEYEVENTF_SCANCODE | (down ? 0 : KEYEVENTF_KEYUP) |
+                    (extended ? KEYEVENTF_EXTENDEDKEY : 0);
+  }
   SendInput(1, &in, sizeof(INPUT));
 }
 

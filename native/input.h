@@ -10,6 +10,9 @@ struct InputEvent {
   int wheelX = 0, wheelY = 0;
   unsigned int keycode = 0;   // raw OS virtual-key / CGKeyCode
   unsigned int modifiers = 0; // bit0 shift, bit1 ctrl, bit2 alt, bit3 meta
+  unsigned int scancode = 0;  // Windows hardware make code (0 elsewhere)
+  bool extended = false;      // Windows E0-prefixed key (LLKHF_EXTENDED)
+  bool injected = false;      // event was synthesized (LLKHF_INJECTED), not physical
 };
 
 using EventCallback = std::function<void(const InputEvent&)>;
@@ -23,7 +26,11 @@ void SetSuppress(bool on);      // swallow local events while controlling a remo
 void InjectMouseMove(int x, int y);
 void InjectMouseButton(int button, bool down);
 void InjectWheel(int dx, int dy);
-void InjectKey(bool down, unsigned int osKeycode);
+// extended: Windows-only "E0 prefix" hint (ignored on macOS). Must be set for
+// AltGr/RightCtrl, Numpad Divide/Enter, the Win & Application keys, PrintScreen,
+// and the Ins/Del/Home/End/PgUp/PgDn/arrow cluster, or Windows misreads them on
+// injection. NOT NumLock (real make code 0x45, no E0) — see keymap_os.js.
+void InjectKey(bool down, unsigned int osKeycode, bool extended);
 void WarpCursor(int x, int y);
 void GetCursorPos(int* x, int* y);
 }  // namespace platform

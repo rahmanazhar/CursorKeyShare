@@ -6,7 +6,7 @@
   "license": "MIT",
   "main": "src/main/main.js",
   "scripts": {
-    "test": "node test/edge-crossing.js && node test/netinfo.js && node test/net-liveness.js && node test/client-core.js",
+    "test": "node test/edge-crossing.js && node test/netinfo.js && node test/net-liveness.js && node test/client-core.js && node test/keymap-os.js",
     "start": "electron .",
     "dev": "electron . --dev",
     "build:native": "node-gyp rebuild",
@@ -99,11 +99,12 @@
       "icon": "buildResources/icon.png",
       "target": [
         "nsis"
-      ]
+      ],
+      "requestedExecutionLevel": "requireAdministrator"
     },
     "nsis": {
       "oneClick": false,
-      "perMachine": false,
+      "perMachine": true,
       "allowToChangeInstallationDirectory": true
     }
   }

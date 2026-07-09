@@ -97,7 +97,7 @@ class NativeBackend extends EventEmitter {
   }
   injectKey(down, canon) {
     const os = keymapOs.toOs(canon);
-    if (os >= 0) this._n.injectKey(!!down, os);
+    if (os >= 0) this._n.injectKey(!!down, os, keymapOs.isExtended(canon));
   }
   warpCursor(x, y) {
     this._n.warpCursor(Math.round(x), Math.round(y));

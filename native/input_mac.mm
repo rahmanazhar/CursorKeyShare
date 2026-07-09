@@ -248,7 +248,8 @@ void InjectWheel(int dx, int dy) {
   CFRelease(e);
 }
 
-void InjectKey(bool down, unsigned int osKeycode) {
+void InjectKey(bool down, unsigned int osKeycode, bool extended) {
+  (void)extended;  // Windows-only concept: macOS CGKeyCodes are unambiguous.
   CGEventRef e = CGEventCreateKeyboardEvent(g_src, (CGKeyCode)osKeycode, down);
   CGEventPost(kCGHIDEventTap, e);
   CFRelease(e);
