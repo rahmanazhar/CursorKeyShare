@@ -135,6 +135,11 @@ Napi::Value WarpCursor(const Napi::CallbackInfo& info) {
   return info.Env().Undefined();
 }
 
+Napi::Value SetCursorVisible(const Napi::CallbackInfo& info) {
+  platform::SetCursorVisible(info.Length() < 1 || info[0].ToBoolean().Value());
+  return info.Env().Undefined();
+}
+
 Napi::Value GetCursorPos(const Napi::CallbackInfo& info) {
   int x = 0, y = 0;
   platform::GetCursorPos(&x, &y);
@@ -270,6 +275,7 @@ Napi::Object Init(Napi::Env env, Napi::Object exports) {
   exports.Set("injectWheel", Napi::Function::New(env, InjectWheel));
   exports.Set("injectKey", Napi::Function::New(env, InjectKey));
   exports.Set("warpCursor", Napi::Function::New(env, WarpCursor));
+  exports.Set("setCursorVisible", Napi::Function::New(env, SetCursorVisible));
   exports.Set("getCursorPos", Napi::Function::New(env, GetCursorPos));
   exports.Set("bindToInterface", Napi::Function::New(env, BindToInterface));
   exports.Set("connectBoundTcp", Napi::Function::New(env, ConnectBoundTcp));

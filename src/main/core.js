@@ -70,13 +70,24 @@ class ServerCore extends EventEmitter {
     b.on('keydown', (e) => this._onKey(e, true));
     b.on('keyup', (e) => this._onKey(e, false));
     b.startCapture();
+    // Defensive: if a previous run died while controlling a remote, the cursor
+    // may still be hidden — starting fresh must always begin visible.
+    this._setCursorVisible(true);
     this.emit('status', { active: this.activeId });
   }
 
   stop() {
+    this._setCursorVisible(true);
     try {
       this.backend.setSuppress(false);
       this.backend.stopCapture();
+    } catch {}
+  }
+
+  // Feature-detected: the JS fallback backend has no cursor-visibility control.
+  _setCursorVisible(v) {
+    try {
+      if (typeof this.backend.setCursorVisible === 'function') this.backend.setCursorVisible(v);
     } catch {}
   }
 
@@ -143,7 +154,9 @@ class ServerCore extends EventEmitter {
     if (!probe) return null;
 
     const node = this.layout.nodeAt(probe.x, probe.y);
-    if (!node || node.id === this.layout.localId) return null;
+    // Never cross into an offline machine — we'd suppress input and hide the
+    // cursor while sending events into the void.
+    if (!node || node.id === this.layout.localId || !node.online) return null;
     // Land MARGIN px inside the destination (away from the shared edge) so a
     // reverse jitter doesn't immediately bounce us back.
     const entry = this._insetInto(node, probe.x, probe.y, MARGIN);
@@ -160,8 +173,10 @@ class ServerCore extends EventEmitter {
       // A crossing. Debounce it: within the guard window we keep control where it
       // is and CLAMP the virtual cursor to the active screen — never let it drift
       // off-screen while we're still controlling it (that would desync + flicker).
+      // Offline rectangles are walls for the same reason as in _edgeTarget.
+      const offline = r.node.id !== this.layout.localId && !r.node.online;
       const now = Date.now();
-      if (now - this._lastSwitch < (this.config.edgeGuardMs || 0)) {
+      if (offline || now - this._lastSwitch < (this.config.edgeGuardMs || 0)) {
         this.vx = clamp(r.x, active.layoutX, active.layoutX + active.width - 1);
         this.vy = clamp(r.y, active.layoutY, active.layoutY + active.height - 1);
       } else {
@@ -199,6 +214,7 @@ class ServerCore extends EventEmitter {
     const park = this._localCenter();
     try { this.backend.warpCursor(park.x, park.y); } catch {}
     this.backend.setSuppress(true, park);
+    this._setCursorVisible(false); // the parked arrow shouldn't sit mid-screen
 
     const loc = this.layout.toLocal(node, this.vx, this.vy);
     this.server.sendEnter(node.id, loc.x, loc.y);
@@ -231,6 +247,7 @@ class ServerCore extends EventEmitter {
     this.mode = 'local';
     this.activeId = this.layout.localId;
     this.backend.setSuppress(false);
+    this._setCursorVisible(true);
 
     const loc = this.layout.toLocal(localNode, this.vx, this.vy);
     try { this.backend.warpCursor(loc.x, loc.y); } catch {}
@@ -271,6 +288,7 @@ class ServerCore extends EventEmitter {
     this.mode = 'local';
     this.activeId = this.layout.localId;
     try { this.backend.setSuppress(false); } catch {}
+    this._setCursorVisible(true);
     if (local) {
       const c = this._localCenter();
       try { this.backend.warpCursor(c.x, c.y); } catch {}

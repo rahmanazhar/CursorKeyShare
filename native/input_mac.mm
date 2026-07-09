@@ -19,6 +19,7 @@
 #import <CoreGraphics/CoreGraphics.h>
 #import <CoreFoundation/CoreFoundation.h>
 #import <IOKit/hidsystem/IOLLEvent.h>  // NX_DEVICE*KEYMASK per-side modifier bits
+#include <dlfcn.h>
 #include <atomic>
 #include <cstdint>
 #include <future>
@@ -257,6 +258,40 @@ void InjectKey(bool down, unsigned int osKeycode, bool extended) {
 
 void WarpCursor(int x, int y) {
   CGWarpMouseCursorPosition(CGPointMake(x, y));
+  CGAssociateMouseAndMouseCursorPosition(true);
+}
+
+// CGDisplayHideCursor only affects the cursor when the calling app is
+// frontmost — useless for a background KVM. The private (but ~15-years-stable,
+// used by Synergy/Barrier/Deskflow) "SetsCursorInBackground" connection
+// property lifts that restriction. Resolved via dlsym at CALL time, not linked
+// at load time: if Apple ever drops these exports, the failure must be "cursor
+// no longer hides", not "the whole addon fails to require() and the app
+// silently loses the native backend".
+typedef int CGSConnectionID;
+typedef CGSConnectionID (*CGSDefaultConnectionFn)(void);
+typedef CGError (*CGSSetConnectionPropertyFn)(CGSConnectionID, CGSConnectionID,
+                                              CFStringRef, CFTypeRef);
+
+static std::atomic<bool> g_cursorHidden{false};
+
+void SetCursorVisible(bool visible) {
+  if (visible == !g_cursorHidden.load()) return;  // keep hide/show balanced
+  static CGSDefaultConnectionFn defaultConn =
+      (CGSDefaultConnectionFn)dlsym(RTLD_DEFAULT, "_CGSDefaultConnection");
+  static CGSSetConnectionPropertyFn setProp =
+      (CGSSetConnectionPropertyFn)dlsym(RTLD_DEFAULT, "CGSSetConnectionProperty");
+  if (defaultConn && setProp) {
+    setProp(defaultConn(), defaultConn(), CFSTR("SetsCursorInBackground"), kCFBooleanTrue);
+  }
+  // Without the CGS property this still works while the app is frontmost.
+  if (visible) {
+    CGDisplayShowCursor(kCGDirectMainDisplay);
+    g_cursorHidden = false;
+  } else {
+    CGDisplayHideCursor(kCGDirectMainDisplay);
+    g_cursorHidden = true;
+  }
   CGAssociateMouseAndMouseCursorPosition(true);
 }
 
