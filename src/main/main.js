@@ -375,6 +375,18 @@ function createWindow() {
       state.win.hide();
     }
   });
+  // We're a tray app: treat minimize like close — hide to the tray rather than
+  // leaving a truly-minimized window. A minimized window on Windows enters a
+  // background state that was reported to interfere with the share/control when
+  // the client is minimized; hiding sidesteps the OS minimize path entirely while
+  // the engine (main-process sockets + injection) keeps running. Reopen from the
+  // tray icon. The 'minimize' event isn't cancelable, so we hide right after.
+  state.win.on('minimize', () => {
+    if (!app.isQuitting) {
+      state.win.hide();
+      log('window minimized → hidden to tray (engine still running)');
+    }
+  });
 }
 
 function trayIcon() {
