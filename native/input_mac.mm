@@ -33,6 +33,12 @@ static const int64_t CKS_SENTINEL = 0x434B53;  // 'CKS'
 EventCallback g_cb;
 std::atomic<bool> g_suppress{false};
 std::atomic<bool> g_running{false};
+// Fallback motion tracking for injected/absolute mouse events (see the
+// mouse-move case): a remote-desktop app like AnyDesk driving this Mac posts
+// moves with an absolute location but NO kCGMouseEventDeltaX/Y, so we recover
+// the delta from the change in position. Reset each time suppression turns on.
+int g_injLastX = 0, g_injLastY = 0;
+bool g_haveInjBase = false;
 std::thread g_thread;
 CFMachPortRef g_tap = nullptr;
 CFRunLoopRef g_runLoop = nullptr;
@@ -88,9 +94,28 @@ CGEventRef TapCallback(CGEventTapProxy proxy, CGEventType type, CGEventRef event
     case kCGEventRightMouseDragged:
     case kCGEventOtherMouseDragged: {
       ev.type = InputEvent::MouseMove;
-      ev.dx = (int)CGEventGetIntegerValueField(event, kCGMouseEventDeltaX);
-      ev.dy = (int)CGEventGetIntegerValueField(event, kCGMouseEventDeltaY);
       CGPoint p = CGEventGetLocation(event);
+      // Discriminate injected-vs-physical on the DOUBLE delta: a physical move
+      // (even a sub-pixel trackpad one) always carries non-zero HID motion,
+      // while an injected/absolute move (e.g. a remote-desktop app such as
+      // AnyDesk driving this Mac) carries exactly 0.0. Using the double avoids
+      // misreading a sub-pixel physical move (integer delta rounds to 0) as
+      // injected.
+      double ddx = CGEventGetDoubleValueField(event, kCGMouseEventDeltaX);
+      double ddy = CGEventGetDoubleValueField(event, kCGMouseEventDeltaY);
+      if (ddx == 0.0 && ddy == 0.0) {
+        // Injected: recover the delta from the absolute position so we can still
+        // forward it to the client. The first move after suppression begins only
+        // baselines (avoids a teleport).
+        if (g_haveInjBase) { ev.dx = (int)p.x - g_injLastX; ev.dy = (int)p.y - g_injLastY; }
+        else { ev.dx = 0; ev.dy = 0; }
+        ev.injected = true;
+      } else {
+        // Physical: unchanged — the exact integer HID delta as before.
+        ev.dx = (int)CGEventGetIntegerValueField(event, kCGMouseEventDeltaX);
+        ev.dy = (int)CGEventGetIntegerValueField(event, kCGMouseEventDeltaY);
+      }
+      g_injLastX = (int)p.x; g_injLastY = (int)p.y; g_haveInjBase = true;
       ev.x = (int)p.x; ev.y = (int)p.y;
       g_cb(ev); handled = true;
       break;
@@ -220,7 +245,10 @@ void Stop() {
   g_runLoop = nullptr;
 }
 
-void SetSuppress(bool on) { g_suppress = on; }
+void SetSuppress(bool on) {
+  if (on) g_haveInjBase = false;  // re-baseline injected-motion tracking per remote session
+  g_suppress = on;
+}
 
 void InjectMouseMove(int x, int y) {
   CGEventRef e = CGEventCreateMouseEvent(g_src, kCGEventMouseMoved,
