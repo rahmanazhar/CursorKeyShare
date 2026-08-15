@@ -257,6 +257,31 @@ class NetClient extends EventEmitter {
     this._sendTcp(proto.encodeJson(proto.T.CLIPBOARD, { format, data }));
   }
 
+  /**
+   * Point at a different server and reconnect immediately.
+   *
+   * Discovery hands us a link-local address that cannot be known ahead of time,
+   * so the host is not fixed at construction. Bumping the attempt epoch first
+   * makes every callback from the outgoing socket a no-op, so the old session
+   * cannot schedule a reconnect to the address we are leaving.
+   */
+  setHost(host) {
+    if (!host || host === this.host) return false;
+    const from = this.host || '(none)';
+    this.host = host;
+    this._attemptId++;
+    if (this._reconnectTimer) clearTimeout(this._reconnectTimer);
+    this._reconnectTimer = null;
+    if (this._pingTimer) clearInterval(this._pingTimer);
+    this._pingTimer = null;
+    if (this._sock) try { this._sock.destroy(); } catch {}
+    this._sock = null;
+    this.connected = false;
+    this.emit('warn', `server address changed ${from} -> ${host}`);
+    if (!this._stopped) this._connect();
+    return true;
+  }
+
   updateBounds(bounds) {
     this.bounds = bounds;
     this._sendTcp(proto.encodeJson(proto.T.SCREENS, { bounds }));

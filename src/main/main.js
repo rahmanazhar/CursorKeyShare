@@ -25,6 +25,8 @@ const { Layout } = require('./layout');
 const { getBackend } = require('./input');
 const { NetServer } = require('./net/server');
 const { NetClient } = require('./net/client');
+const { Discovery } = require('./net/discovery');
+const { displayAddr } = require('./net/zone');
 const { ServerCore, ClientCore } = require('./core');
 
 // Guard against being launched as plain Node (e.g. ELECTRON_RUN_AS_NODE=1),
@@ -60,6 +62,7 @@ const state = {
   server: null,
   client: null,
   core: null,
+  discovery: null,
   running: false,
   activeId: null,
   win: null,
@@ -202,6 +205,8 @@ function startEngine() {
     state.core = new ClientCore({ backend: state.backend, client });
   }
 
+  startDiscovery(key);
+
   // Starting input capture can fail on macOS if Accessibility / Input Monitoring
   // haven't been granted (the native tap can't install) — surface it instead of
   // silently doing nothing.
@@ -229,7 +234,52 @@ function startEngine() {
   return true;
 }
 
+/**
+ * Announce ourselves, and — as a client — connect to whoever answers.
+ *
+ * This is what makes the VPN case work. A full-tunnel VPN installs routes more
+ * specific than the LAN's on-link route (WARP carves a /22 into /31s and /30s,
+ * leaving only the gateway reachable), so the peer's IPv4 address is swallowed
+ * by the tunnel. Its link-local IPv6 address is not routed at all, so there is
+ * no route to override — but it also cannot be typed into a config field, which
+ * is why discovery is required rather than merely convenient.
+ */
+function startDiscovery(key) {
+  stopDiscovery();
+  const disc = new Discovery({
+    key,
+    localId: state.cfg.localId,
+    name: state.cfg.name,
+    tcpPort: state.cfg.tcpPort,
+    udpPort: state.cfg.udpPort,
+  });
+  disc.on('warn', (m) => log('discovery: ' + m));
+  disc.on('listening', (i) =>
+    log(`discovery listening on ${i.interfaces.join(', ')} (link-local IPv6)`));
+  disc.on('peer', (p) => {
+    if (!p.first) return; // announcements repeat; only act on a new sighting
+    log(`discovered ${p.name} at ${displayAddr(p.address)}`);
+    // Only the client dials. A manually configured serverHost stays in charge —
+    // it is the escape hatch for peers on another subnet, where link-local
+    // cannot reach.
+    if (state.cfg.role !== 'client' || !state.client) return;
+    if (state.cfg.serverHost) return;
+    if (state.client.connected) return;
+    state.client.tcpPort = p.tcpPort || state.cfg.tcpPort;
+    state.client.serverUdpPort = p.udpPort || state.cfg.udpPort;
+    state.client.setHost(p.address);
+  });
+  disc.start();
+  state.discovery = disc;
+}
+
+function stopDiscovery() {
+  if (state.discovery) try { state.discovery.stop(); } catch {}
+  state.discovery = null;
+}
+
 function stopEngine() {
+  stopDiscovery();
   if (state.core) try { state.core.stop(); } catch {}
   if (state.server) try { state.server.stop(); } catch {}
   if (state.client) try { state.client.stop(); } catch {}
