@@ -69,4 +69,26 @@ function withZone(addr, iface, platform) {
   return stripZone(addr) + '%' + zone;
 }
 
-module.exports = { isLinkLocal, stripZone, zoneFor, withZone };
+/**
+ * Make an address safe to hand to a dual-stack udp6 socket.
+ *
+ * A udp6 socket cannot send to a bare dotted quad — verified: send to
+ * "127.0.0.1" fails EINVAL while "::ffff:127.0.0.1" succeeds. Inbound IPv4
+ * peers already arrive as "::ffff:…", so the rule is simply: never strip the
+ * prefix off a stored peer address, and add it to any bare IPv4 literal.
+ */
+function normalizeForUdp6(addr) {
+  if (typeof addr !== 'string') return addr;
+  return /^\d{1,3}(\.\d{1,3}){3}$/.test(addr) ? '::ffff:' + addr : addr;
+}
+
+/**
+ * Human-readable form: drop the ::ffff: prefix and any zone. Display only —
+ * never feed the result back into a socket.
+ */
+function displayAddr(addr) {
+  if (typeof addr !== 'string') return addr;
+  return stripZone(addr).replace(/^::ffff:/i, '');
+}
+
+module.exports = { isLinkLocal, stripZone, zoneFor, withZone, normalizeForUdp6, displayAddr };

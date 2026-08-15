@@ -8,7 +8,8 @@
 // interface NAME and Windows wants the numeric INDEX, and each rejects the
 // other's form. Verified on macOS: 'fe80::…%7' times out where '%en1' works.
 
-const { zoneFor, withZone, stripZone, isLinkLocal } = require('../src/main/net/zone');
+const { zoneFor, withZone, stripZone, isLinkLocal, normalizeForUdp6, displayAddr } =
+  require('../src/main/net/zone');
 
 let fails = 0;
 const ck = (n, c, d) => { console.log((c ? 'PASS ' : 'FAIL ') + n + (c ? '' : '  -> ' + d)); if (!c) fails++; };
@@ -71,6 +72,27 @@ ck('the two platform forms differ (so addresses are not exchangeable)',
    macForm !== winForm, macForm + ' vs ' + winForm);
 ck('stripping either yields the same bare address',
    stripZone(macForm) === stripZone(winForm), stripZone(macForm) + ' / ' + stripZone(winForm));
+
+// --- udp6 send normalisation ------------------------------------------------
+// Verified on this machine: a udp6 socket sending to "127.0.0.1" fails EINVAL,
+// while "::ffff:127.0.0.1" succeeds. Stripping the prefix off a stored peer
+// address would therefore kill motion for every IPv4 peer.
+ck('bare IPv4 gains the ::ffff: prefix',
+   normalizeForUdp6('192.168.68.50') === '::ffff:192.168.68.50', normalizeForUdp6('192.168.68.50'));
+ck('an already-mapped address is untouched',
+   normalizeForUdp6('::ffff:192.168.68.50') === '::ffff:192.168.68.50');
+ck('link-local with a zone is untouched',
+   normalizeForUdp6('fe80::1%en1') === 'fe80::1%en1');
+ck('global IPv6 is untouched', normalizeForUdp6('2606:4700::8') === '2606:4700::8');
+ck('a hostname is not mistaken for IPv4', normalizeForUdp6('peer.local') === 'peer.local');
+
+// --- display form -----------------------------------------------------------
+ck('display drops the ::ffff: prefix',
+   displayAddr('::ffff:192.168.68.50') === '192.168.68.50', displayAddr('::ffff:192.168.68.50'));
+ck('display drops the zone',
+   displayAddr('fe80::8da:2916:9240:5446%en1') === 'fe80::8da:2916:9240:5446',
+   displayAddr('fe80::8da:2916:9240:5446%en1'));
+ck('display leaves plain IPv4 alone', displayAddr('192.168.68.50') === '192.168.68.50');
 
 console.log('\n' + (fails ? fails + ' FAILURE(S)' : 'ALL PASS'));
 process.exit(fails ? 1 : 0);
