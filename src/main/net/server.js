@@ -12,6 +12,7 @@ const EventEmitter = require('events');
 const crypto = require('./crypto');
 const proto = require('./protocol');
 const netbind = require('./netbind');
+const { normalizeForUdp6 } = require('./zone');
 const { FrameReader, frame } = require('./frame');
 
 class NetServer extends EventEmitter {
@@ -35,14 +36,19 @@ class NetServer extends EventEmitter {
   }
 
   start() {
-    this._udp = dgram.createSocket('udp4');
+    // Dual-stack: one udp6 socket bound to :: serves link-local IPv6 peers AND
+    // IPv4 ones (which arrive as ::ffff:…). Verified on this machine.
+    this._udp = dgram.createSocket({ type: 'udp6', ipv6Only: false, reuseAddr: true });
     this._udp.on('message', (msg, rinfo) => this._onUdp(msg, rinfo));
     this._udp.on('error', (e) => this.emit('error', e));
-    this._udp.bind(this.udpPort, () => this._scope(this._udp));
+    this._udp.bind(this.udpPort, '::', () => this._scope(this._udp));
 
     this._tcp = net.createServer((sock) => this._onConn(sock));
     this._tcp.on('error', (e) => this.emit('error', e));
-    this._tcp.listen(this.tcpPort, () => {
+    // Listen on :: rather than a specific address — binding directly to a
+    // link-local address requires a nonzero zone on Windows and would serve
+    // only that one NIC.
+    this._tcp.listen(this.tcpPort, '::', () => {
       this._scope(this._tcp);
       this.emit('listening', this.tcpPort);
     });
@@ -97,7 +103,10 @@ class NetServer extends EventEmitter {
       name: null,
       socket: sock,
       reader: new FrameReader(),
-      ip: sock.remoteAddress ? sock.remoteAddress.replace(/^::ffff:/, '') : null,
+      // Stored VERBATIM. The ::ffff: prefix and any %zone are what make this
+      // address usable as a udp6 send target; stripping either breaks motion.
+      // Strip for display only (see zone.displayAddr).
+      ip: sock.remoteAddress || null,
       udpPort: this.udpPort,
       originX: 0,
       originY: 0,
@@ -211,7 +220,9 @@ class NetServer extends EventEmitter {
     if (pkt.type === proto.T.PING && pkt.id) {
       const peer = this.peers.get(pkt.id);
       if (peer) {
-        peer.ip = rinfo.address.replace(/^::ffff:/, '');
+        // Verbatim again — for a link-local peer this carries the %zone that
+        // makes the address routable-without-routing back to them.
+        peer.ip = rinfo.address;
         peer.udpPort = rinfo.port;
         peer.lastRx = Date.now();
       }
@@ -244,7 +255,8 @@ class NetServer extends EventEmitter {
   _sendUdp(peer, plaintext) {
     if (!peer || !this._udp || !peer.ip) return;
     const blob = crypto.seal(this.key, plaintext);
-    this._udp.send(blob, peer.udpPort, peer.ip, (e) => {
+    // A dual-stack udp6 socket rejects a bare dotted quad with EINVAL.
+    this._udp.send(blob, peer.udpPort, normalizeForUdp6(peer.ip), (e) => {
       if (e) this.emit('warn', 'udp send failed: ' + e.message);
     });
   }

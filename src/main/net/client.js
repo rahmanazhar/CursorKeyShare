@@ -9,6 +9,7 @@ const EventEmitter = require('events');
 const crypto = require('./crypto');
 const proto = require('./protocol');
 const netbind = require('./netbind');
+const { normalizeForUdp6, isLinkLocal } = require('./zone');
 const { FrameReader, frame } = require('./frame');
 
 class NetClient extends EventEmitter {
@@ -43,10 +44,12 @@ class NetClient extends EventEmitter {
 
   start() {
     this._stopped = false;
-    this._udp = dgram.createSocket('udp4');
+    // Dual-stack, matching the server: serves a link-local IPv6 session and an
+    // IPv4 one without needing two sockets.
+    this._udp = dgram.createSocket({ type: 'udp6', ipv6Only: false, reuseAddr: true });
     this._udp.on('message', (msg) => this._onUdp(msg));
     this._udp.on('error', (e) => this.emit('error', e));
-    this._udp.bind(this.udpPort, () => {
+    this._udp.bind(this.udpPort, '::', () => {
       if (this.bindIf) netbind.bindSocketToInterface(this._udp, this.bindIf);
     });
     this._connect();
@@ -72,7 +75,10 @@ class NetClient extends EventEmitter {
     // BEFORE the SYN goes out — the only reliable way under a full-tunnel VPN.
     // If that fails (e.g. the peer isn't reachable on that NIC) fall back to a
     // normal connection, so pinning never regresses a non-VPN setup.
-    if (this.bindIf && netbind.available()) {
+    // A link-local target needs no interface pinning — the %zone in the address
+    // already selects the NIC, which is precisely why it survives a VPN. The
+    // native bound-connect is AF_INET-only and would reject the address anyway.
+    if (this.bindIf && !isLinkLocal(this.host) && netbind.available()) {
       try {
         const sock = await netbind.connectBoundTcp(this.host, this.tcpPort, this.bindIf, 4000);
         if (this._stopped) { try { sock.destroy(); } catch {} return; }
@@ -179,7 +185,7 @@ class NetClient extends EventEmitter {
       this.key,
       proto.encodeJson(proto.T.PING, { id: this.localId, t: Date.now() })
     );
-    this._udp.send(blob, this.serverUdpPort, this.host, () => {});
+    this._udp.send(blob, this.serverUdpPort, normalizeForUdp6(this.host), () => {});
   }
 
   _handle(pkt) {
@@ -249,6 +255,31 @@ class NetClient extends EventEmitter {
 
   sendClipboard(format, data) {
     this._sendTcp(proto.encodeJson(proto.T.CLIPBOARD, { format, data }));
+  }
+
+  /**
+   * Point at a different server and reconnect immediately.
+   *
+   * Discovery hands us a link-local address that cannot be known ahead of time,
+   * so the host is not fixed at construction. Bumping the attempt epoch first
+   * makes every callback from the outgoing socket a no-op, so the old session
+   * cannot schedule a reconnect to the address we are leaving.
+   */
+  setHost(host) {
+    if (!host || host === this.host) return false;
+    const from = this.host || '(none)';
+    this.host = host;
+    this._attemptId++;
+    if (this._reconnectTimer) clearTimeout(this._reconnectTimer);
+    this._reconnectTimer = null;
+    if (this._pingTimer) clearInterval(this._pingTimer);
+    this._pingTimer = null;
+    if (this._sock) try { this._sock.destroy(); } catch {}
+    this._sock = null;
+    this.connected = false;
+    this.emit('warn', `server address changed ${from} -> ${host}`);
+    if (!this._stopped) this._connect();
+    return true;
   }
 
   updateBounds(bounds) {
