@@ -9,6 +9,7 @@
 // LAN peers comes first.
 
 const os = require('os');
+const { zoneFor } = require('./net/zone');
 
 // Interface-name fragments that are almost never the LAN address to hand a peer:
 // VPN tunnels (utun/tun/tap/ppp/wireguard/WARP/Tailscale/ZeroTier/commercial
@@ -110,6 +111,46 @@ function resolveBindInterface(setting, peerIp) {
   return ranked[0].name;
 }
 
+/**
+ * Physical NICs that carry an IPv6 link-local address, best-first.
+ *
+ * This is the VPN-proof path. A full-tunnel VPN defeats the on-link IPv4 route
+ * by installing more-specific ones (WARP carves a LAN into /31s and /30s, so
+ * only the gateway and the host itself still resolve to the physical NIC), but
+ * fe80::/10 is not routed at all — the zone selects the interface directly, so
+ * there is no route to make more specific.
+ *
+ * The VIRTUAL filter matters more here than for IPv4: every VPN tunnel also has
+ * an fe80:: address, and beaconing on one would push discovery straight into
+ * the tunnel we exist to escape.
+ *
+ * @param {string} [platform] defaults to the running platform
+ * @param {object} [table]    defaults to os.networkInterfaces(); injectable for tests
+ * @returns {Array<{name:string, address:string, scopeid:number, zone:string, sendable:string}>}
+ */
+function linkLocalInterfaces(platform, table) {
+  const plat = platform || process.platform;
+  const ifaces = table || os.networkInterfaces();
+  const out = [];
+  for (const [name, addrs] of Object.entries(ifaces)) {
+    if (VIRTUAL.test(name)) continue;
+    for (const a of addrs || []) {
+      if (a.family !== 'IPv6' || a.internal) continue;
+      if (!/^fe80:/i.test(a.address)) continue;
+      const iface = { name, scopeid: a.scopeid };
+      const zone = zoneFor(iface, plat);
+      // No usable zone means no usable address: Windows silently accepts zone 0
+      // and then treats the address as ambiguous, burning neighbour-discovery
+      // timeouts across every adapter instead of failing fast.
+      if (!zone) continue;
+      const address = a.address.replace(/%.*$/, '');
+      out.push({ name, address, scopeid: a.scopeid, zone, sendable: `${address}%${zone}` });
+    }
+  }
+  // Reuse the IPv4 ranking heuristic for a stable, sensible order (en0 before en1).
+  return out.sort((a, b) => score({ name: a.name, address: '' }) - score({ name: b.name, address: '' }));
+}
+
 // Hostname without the noisy mDNS ".local" suffix macOS appends.
 function detectName() {
   return os.hostname().replace(/\.local$/i, '') || 'machine';
@@ -123,4 +164,5 @@ module.exports = {
   rankedInterfaces,
   bestInterface,
   resolveBindInterface,
+  linkLocalInterfaces,
 };
