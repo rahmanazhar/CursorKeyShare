@@ -75,6 +75,10 @@ class NetServer extends EventEmitter {
         this._sendTcp(p, proto.encodeJson(proto.T.BYE, { reason: 'server-stop' }));
         p.socket.destroy();
       } catch {}
+      // Emit synchronously. peers.clear() below runs before the sockets' async
+      // 'close' fires, at which point the close handler's identity check would
+      // no longer match — so this is the only place the event can come from.
+      if (p.id) this.emit('peer-disconnected', p.id);
     }
     this.peers.clear();
     if (this._reaper) clearInterval(this._reaper);

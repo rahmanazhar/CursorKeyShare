@@ -233,6 +233,14 @@ function stopEngine() {
   if (state.client) try { state.client.stop(); } catch {}
   state.core = state.server = state.client = null;
   state.running = false;
+  // Nothing is connected any more. A node left `online` lets the cursor cross
+  // into a machine that is no longer there.
+  if (state.layout && state.cfg) {
+    for (const n of state.layout.list()) {
+      if (n.id !== state.cfg.localId) state.layout.setOnline(n.id, false);
+    }
+    pushLayout();
+  }
   stopPowerSaveBlocker();
   try { if (state.backend && state.backend.setProcessResponsive) state.backend.setProcessResponsive(false); } catch {}
   state.activeId = state.cfg ? state.cfg.localId : null;
