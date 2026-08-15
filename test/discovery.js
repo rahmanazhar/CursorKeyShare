@@ -91,6 +91,50 @@ function waitFor(cond, ms = 8000, step = 50) {
     }), 'utf8'));
     a._onMessage(selfPkt, { address: 'fe80::beef%en1' });
     ck('a beacon claiming our own id is dropped', !seenByA.some((p) => p.id === 'aaa'));
+
+    // --- role is carried, so clients never dial other clients ---------------
+    ck('beacon carries a role', typeof peer.role === 'string', String(peer.role));
+
+    const seal = (o) => crypto.seal(key, Buffer.from(JSON.stringify(o), 'utf8'));
+    const base = { v: 1, name: 'x', tcpPort: 1, udpPort: 2 };
+
+    // --- an off-link source is rejected before we even try to decrypt -------
+    const before = seenByA.length;
+    a._onMessage(seal({ ...base, id: 'offlink', role: 'server', t: Date.now() }),
+                 { address: '192.168.68.99' });
+    a._onMessage(seal({ ...base, id: 'offlink6', role: 'server', t: Date.now() }),
+                 { address: '2606:4700::8' });
+    ck('a non-link-local source is ignored', seenByA.length === before,
+       'grew by ' + (seenByA.length - before));
+
+    // --- address change is reported, so a moved peer is re-targeted ---------
+    a._onMessage(seal({ ...base, id: 'mover', role: 'server', t: Date.now() }),
+                 { address: 'fe80::1111%en1' });
+    const m1 = seenByA.filter((p) => p.id === 'mover');
+    ck('a new peer is flagged changed', m1.length === 1 && m1[0].changed === true);
+
+    a._onMessage(seal({ ...base, id: 'mover', role: 'server', t: Date.now() }),
+                 { address: 'fe80::1111%en1' });
+    const m2 = seenByA.filter((p) => p.id === 'mover');
+    ck('a repeat at the SAME address is not flagged changed',
+       m2.length === 2 && m2[1].changed === false, JSON.stringify(m2.map((p) => p.changed)));
+
+    a._onMessage(seal({ ...base, id: 'mover', role: 'server', t: Date.now() }),
+                 { address: 'fe80::2222%en1' });
+    const m3 = seenByA.filter((p) => p.id === 'mover');
+    ck('a MOVED peer is flagged changed again',
+       m3.length === 3 && m3[2].changed === true && m3[2].address === 'fe80::2222%en1',
+       JSON.stringify(m3.map((p) => p.changed)));
+
+    // --- a replayed beacon cannot claim someone else's address --------------
+    a._onMessage(seal({ ...base, id: 'spoof', role: 'server', a: 'fe80::aaaa', t: Date.now() }),
+                 { address: 'fe80::bbbb%en1' });
+    ck('a beacon whose claimed address differs from its source is dropped',
+       !seenByA.some((p) => p.id === 'spoof'));
+    a._onMessage(seal({ ...base, id: 'honest', role: 'server', a: 'fe80::cccc', t: Date.now() }),
+                 { address: 'fe80::cccc%en1' });
+    ck('a beacon whose claimed address matches its source is accepted',
+       seenByA.some((p) => p.id === 'honest'));
   } catch (e) {
     ck('no timeout', false, e.message);
   } finally {

@@ -159,12 +159,33 @@ Napi::Value BindToInterface(const Napi::CallbackInfo& info) {
   std::string name = info[1].As<Napi::String>().Utf8Value();
   unsigned int idx = if_nametoindex(name.c_str());
   if (idx == 0) return Napi::Boolean::New(env, false);
-  int r = setsockopt(fd, IPPROTO_IP, IP_BOUND_IF, &idx, sizeof(idx));
+
+  // The option level MUST match the socket's address family: IP_BOUND_IF is
+  // only valid on AF_INET, and IPV6_BOUND_IF only on AF_INET6. Using the wrong
+  // one returns EINVAL, which used to be swallowed as a silent no-op — so the
+  // transport's move to dual-stack udp6 sockets quietly disabled the very VPN
+  // pin this function exists to apply.
+  // macOS has no SO_DOMAIN (that is a Linux extension), so ask the socket for
+  // its own bound address and read the family off it.
+  struct sockaddr_storage ss;
+  socklen_t slen = sizeof(ss);
+  int domain = (getsockname(fd, (struct sockaddr*)&ss, &slen) == 0)
+                   ? (int)ss.ss_family
+                   : AF_INET;
+
+  int r;
+  if (domain == AF_INET6) {
+    r = setsockopt(fd, IPPROTO_IPV6, IPV6_BOUND_IF, &idx, sizeof(idx));
+  } else {
+    r = setsockopt(fd, IPPROTO_IP, IP_BOUND_IF, &idx, sizeof(idx));
+  }
   return Napi::Boolean::New(env, r == 0);
 #else
-  // Windows side is never on the VPN in the supported scenario — nothing to do.
+  // No IP_BOUND_IF equivalent is reachable from a Node socket on Windows:
+  // LibuvStreamWrap::GetFD() returns -1 there, so the fd never reaches us.
+  // Report failure honestly rather than claiming a pin that never happened.
   (void)info;
-  return Napi::Boolean::New(env, true);
+  return Napi::Boolean::New(env, false);
 #endif
 }
 

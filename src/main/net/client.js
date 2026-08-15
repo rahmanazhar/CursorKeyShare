@@ -46,7 +46,9 @@ class NetClient extends EventEmitter {
     this._stopped = false;
     // Dual-stack, matching the server: serves a link-local IPv6 session and an
     // IPv4 one without needing two sockets.
-    this._udp = dgram.createSocket({ type: 'udp6', ipv6Only: false, reuseAddr: true });
+    // No reuseAddr here: a port clash should fail loudly. Sharing UDP 24801 with
+    // another process would silently split motion delivery between them.
+    this._udp = dgram.createSocket({ type: 'udp6', ipv6Only: false });
     this._udp.on('message', (msg) => this._onUdp(msg));
     this._udp.on('error', (e) => this.emit('error', e));
     this._udp.bind(this.udpPort, '::', () => {
@@ -69,7 +71,10 @@ class NetClient extends EventEmitter {
 
   async _connect() {
     if (this._stopped) return;
-    this._attemptId++;
+    // Captured locally: the awaits below yield, and setHost() may bump the epoch
+    // while a native connect is still in flight. Without re-checking afterwards
+    // the abandoned connect would overwrite _sock and leave two live sessions.
+    const epoch = ++this._attemptId;
 
     // When pinned to a NIC, connect natively so the socket is interface-scoped
     // BEFORE the SYN goes out — the only reliable way under a full-tunnel VPN.
@@ -81,14 +86,14 @@ class NetClient extends EventEmitter {
     if (this.bindIf && !isLinkLocal(this.host) && netbind.available()) {
       try {
         const sock = await netbind.connectBoundTcp(this.host, this.tcpPort, this.bindIf, 4000);
-        if (this._stopped) { try { sock.destroy(); } catch {} return; }
+        if (this._stopped || epoch !== this._attemptId) { try { sock.destroy(); } catch {} return; }
         this._sock = sock;
         this._wire(sock);
         this._onConnected(); // the native connect already completed
         return;
       } catch (e) {
         this.emit('warn', `pinned connect via ${this.bindIf} failed (${e.message}); trying default route`);
-        if (this._stopped) return;
+        if (this._stopped || epoch !== this._attemptId) return;
       }
     }
 
@@ -120,8 +125,11 @@ class NetClient extends EventEmitter {
         bounds: this.bounds,
       })
     );
-    // Register our UDP endpoint and start keepalive.
+    // Register our UDP endpoint and start keepalive. Clear first: if this ever
+    // runs twice without an intervening 'close', the old handle is lost with no
+    // reference and its 7s watchdog goes on destroying the LIVE socket.
     this._registerUdp();
+    if (this._pingTimer) clearInterval(this._pingTimer);
     this._pingTimer = setInterval(() => {
       this._sendTcp(proto.encodeJson(proto.T.PING, { t: Date.now() }));
       this._registerUdp();

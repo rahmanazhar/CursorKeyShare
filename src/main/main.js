@@ -250,6 +250,7 @@ function startDiscovery(key) {
     key,
     localId: state.cfg.localId,
     name: state.cfg.name,
+    role: state.cfg.role,
     tcpPort: state.cfg.tcpPort,
     udpPort: state.cfg.udpPort,
   });
@@ -257,16 +258,31 @@ function startDiscovery(key) {
   disc.on('listening', (i) =>
     log(`discovery listening on ${i.interfaces.join(', ')} (link-local IPv6)`));
   disc.on('peer', (p) => {
-    if (!p.first) return; // announcements repeat; only act on a new sighting
-    log(`discovered ${p.name} at ${displayAddr(p.address)}`);
+    // Only servers are dial targets: without this, two clients on the same LAN
+    // would each discover the other and try to connect.
+    if (p.role !== 'server') return;
+    if (p.changed) log(`discovered ${p.name} at ${displayAddr(p.address)}`);
     // Only the client dials. A manually configured serverHost stays in charge —
     // it is the escape hatch for peers on another subnet, where link-local
     // cannot reach.
     if (state.cfg.role !== 'client' || !state.client) return;
-    if (state.cfg.serverHost) return;
+    // A configured serverHost is the STARTING point and the cross-subnet
+    // fallback — not a veto. Treating it as an override disabled discovery for
+    // every existing user, who by definition has one set, which is precisely
+    // the population that needs the link-local path.
+    //
+    // While a session is up we leave it alone; a working link is not worth
+    // interrupting. But once it drops — which is exactly what a full-tunnel VPN
+    // causes on the IPv4 path — a discovered link-local address is strictly
+    // better than retrying an address the VPN is swallowing.
     if (state.client.connected) return;
-    state.client.tcpPort = p.tcpPort || state.cfg.tcpPort;
-    state.client.serverUdpPort = p.udpPort || state.cfg.udpPort;
+    if (state.client.host === p.address) return;
+    // The ports arrive inside a sealed beacon, but "authenticated" is not
+    // "valid": net.createConnection throws ERR_SOCKET_BAD_PORT synchronously
+    // for a bad port, and _connect() is async — so it would reject unhandled.
+    const port = (v, dflt) => (Number.isInteger(v) && v > 0 && v < 65536 ? v : dflt);
+    state.client.tcpPort = port(p.tcpPort, state.cfg.tcpPort);
+    state.client.serverUdpPort = port(p.udpPort, state.cfg.udpPort);
     state.client.setHost(p.address);
   });
   disc.start();
@@ -314,7 +330,7 @@ function wireServerEvents(server) {
       layoutX: state.cfg.positions[p.id]?.layoutX,
       layoutY: state.cfg.positions[p.id]?.layoutY,
     });
-    log(`peer connected: ${p.name} (${p.ip})`);
+    log(`peer connected: ${p.name} (${displayAddr(p.ip)})`);
     pushLayout();
     pushStatus();
   });
@@ -406,7 +422,9 @@ function pushStatus() {
     error: state.lastError,
     backend: state.backend ? state.backend.constructor.name : null,
     suppressable: state.backend ? state.backend.suppressable : false,
-    peers: state.server ? [...state.server.peers.values()].map((p) => ({ id: p.id, name: p.name, ip: p.ip })) : [],
+    // peer.ip is stored verbatim (::ffff: prefix / %zone intact) because that is
+    // what makes it a usable send target — strip it only here, for the UI.
+    peers: state.server ? [...state.server.peers.values()].map((p) => ({ id: p.id, name: p.name, ip: displayAddr(p.ip) })) : [],
   });
 }
 

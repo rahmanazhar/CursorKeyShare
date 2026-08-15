@@ -15,6 +15,12 @@ const netbind = require('./netbind');
 const { normalizeForUdp6 } = require('./zone');
 const { FrameReader, frame } = require('./frame');
 
+// Does this bind/listen error mean "this host has no IPv6" rather than a real
+// failure (a port already in use, say, which must still surface)?
+function isNoIPv6(e) {
+  return e && (e.code === 'EAFNOSUPPORT' || e.code === 'EADDRNOTAVAIL' || e.code === 'EPROTONOSUPPORT');
+}
+
 class NetServer extends EventEmitter {
   /**
    * @param {{key:Buffer, tcpPort:number, udpPort:number, name:string, localId:string}} opts
@@ -38,17 +44,47 @@ class NetServer extends EventEmitter {
   start() {
     // Dual-stack: one udp6 socket bound to :: serves link-local IPv6 peers AND
     // IPv4 ones (which arrive as ::ffff:…). Verified on this machine.
-    this._udp = dgram.createSocket({ type: 'udp6', ipv6Only: false, reuseAddr: true });
+    //
+    // Binding '::' explicitly opts out of Node's automatic IPv4 fallback, so
+    // both sockets fall back by hand if IPv6 is unavailable — otherwise a host
+    // with IPv6 disabled loses the server entirely rather than losing only the
+    // link-local path.
+    this._udp6 = true;
+    this._udp = dgram.createSocket({ type: 'udp6', ipv6Only: false });
     this._udp.on('message', (msg, rinfo) => this._onUdp(msg, rinfo));
-    this._udp.on('error', (e) => this.emit('error', e));
+    this._udp.once('error', (e) => {
+      if (this._udp6 && isNoIPv6(e)) {
+        this.emit('warn', `IPv6 unavailable (${e.code}) — falling back to IPv4-only UDP`);
+        this._udp6 = false;
+        try { this._udp.close(); } catch {}
+        this._udp = dgram.createSocket('udp4');
+        this._udp.on('message', (msg, rinfo) => this._onUdp(msg, rinfo));
+        this._udp.on('error', (err) => this.emit('error', err));
+        this._udp.bind(this.udpPort, () => this._scope(this._udp));
+        return;
+      }
+      this.emit('error', e);
+    });
     this._udp.bind(this.udpPort, '::', () => this._scope(this._udp));
 
     this._tcp = net.createServer((sock) => this._onConn(sock));
-    this._tcp.on('error', (e) => this.emit('error', e));
+    this._tcp.once('error', (e) => {
+      if (isNoIPv6(e)) {
+        this.emit('warn', `IPv6 listen failed (${e.code}) — falling back to IPv4-only TCP`);
+        this._tcp.on('error', (err) => this.emit('error', err));
+        this._tcp.listen(this.tcpPort, '0.0.0.0', () => {
+          this._scope(this._tcp);
+          this.emit('listening', this.tcpPort);
+        });
+        return;
+      }
+      this.emit('error', e);
+    });
     // Listen on :: rather than a specific address — binding directly to a
     // link-local address requires a nonzero zone on Windows and would serve
     // only that one NIC.
     this._tcp.listen(this.tcpPort, '::', () => {
+      this._tcp.on('error', (e) => this.emit('error', e));
       this._scope(this._tcp);
       this.emit('listening', this.tcpPort);
     });
