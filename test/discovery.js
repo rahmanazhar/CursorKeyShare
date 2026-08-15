@@ -108,19 +108,23 @@ function waitFor(cond, ms = 8000, step = 50) {
        'grew by ' + (seenByA.length - before));
 
     // --- address change is reported, so a moved peer is re-targeted ---------
-    a._onMessage(seal({ ...base, id: 'mover', role: 'server', t: Date.now() }),
-                 { address: 'fe80::1111%en1' });
-    const m1 = seenByA.filter((p) => p.id === 'mover');
-    ck('a new peer is flagged changed', m1.length === 1 && m1[0].changed === true);
+    // Each beacon must claim the address it is sent from, matching the real
+    // announce path.
+    const from = (addr, id) =>
+      a._onMessage(seal({ ...base, id, role: 'server', a: addr, t: Date.now() }),
+                   { address: addr + '%en1' });
 
-    a._onMessage(seal({ ...base, id: 'mover', role: 'server', t: Date.now() }),
-                 { address: 'fe80::1111%en1' });
+    from('fe80::1111', 'mover');
+    const m1 = seenByA.filter((p) => p.id === 'mover');
+    ck('a new peer is flagged changed', m1.length === 1 && m1[0].changed === true,
+       JSON.stringify(m1.map((p) => p.changed)));
+
+    from('fe80::1111', 'mover');
     const m2 = seenByA.filter((p) => p.id === 'mover');
     ck('a repeat at the SAME address is not flagged changed',
        m2.length === 2 && m2[1].changed === false, JSON.stringify(m2.map((p) => p.changed)));
 
-    a._onMessage(seal({ ...base, id: 'mover', role: 'server', t: Date.now() }),
-                 { address: 'fe80::2222%en1' });
+    from('fe80::2222', 'mover');
     const m3 = seenByA.filter((p) => p.id === 'mover');
     ck('a MOVED peer is flagged changed again',
        m3.length === 3 && m3[2].changed === true && m3[2].address === 'fe80::2222%en1',
@@ -135,6 +139,45 @@ function waitFor(cond, ms = 8000, step = 50) {
                  { address: 'fe80::cccc%en1' });
     ck('a beacon whose claimed address matches its source is accepted',
        seenByA.some((p) => p.id === 'honest'));
+
+    // A beacon with NO address field must be rejected outright. Treating the
+    // field as optional would leave the replay path open — and would make the
+    // two checks above pass while protecting nothing.
+    a._onMessage(seal({ ...base, id: 'noaddr', role: 'server', t: Date.now() }),
+                 { address: 'fe80::dddd%en1' });
+    ck('a beacon with no source-address field is rejected',
+       !seenByA.some((p) => p.id === 'noaddr'));
+
+    // --- the guard must be live on the REAL announce path -------------------
+    // The check above only proves _onMessage enforces the field. This proves
+    // _announce actually SENDS it — without this the guard is inert in
+    // production while every test above still passes.
+    const sent = [];
+    const realSock = a._sock;
+    a._sock = { setMulticastInterface() {}, send: (blob) => sent.push(blob) };
+    a._announce();
+    a._sock = realSock;
+    ck('_announce emitted at least one beacon', sent.length > 0, 'n=' + sent.length);
+    const decoded = sent.map((b) => JSON.parse(crypto.open(key, b).toString('utf8')));
+    ck('every real beacon carries a source-address field',
+       decoded.length > 0 && decoded.every((d) => typeof d.a === 'string'),
+       JSON.stringify(decoded.map((d) => d.a)));
+    ck('the advertised address is zone-stripped (portable across platforms)',
+       decoded.every((d) => !d.a.includes('%')), JSON.stringify(decoded.map((d) => d.a)));
+    ck('every real beacon carries a role',
+       decoded.every((d) => d.role === 'server'), JSON.stringify(decoded.map((d) => d.role)));
+    // And the round trip: a genuine beacon must be accepted from its own address.
+    const realBeacon = sent[0];
+    const own = decoded[0].a;
+    a.seen.delete('aaa');
+    const idBefore = seenByA.length;
+    const b2 = mk('bbb2', key); // a receiver with a different localId
+    let got = null;
+    b2.on('peer', (p) => { if (p.id === 'aaa') got = p; });
+    b2._onMessage(realBeacon, { address: own + '%en1' });
+    ck('a genuine beacon is accepted from its own address', got !== null,
+       'own=' + own);
+    void idBefore;
   } catch (e) {
     ck('no timeout', false, e.message);
   } finally {

@@ -123,25 +123,34 @@ class Discovery extends EventEmitter {
   /** Announce ourselves on every physical link-local interface. */
   _announce() {
     if (!this._sock) return;
-    // Deliberately no address field — see the header comment.
-    const blob = crypto.seal(
-      this.key,
-      Buffer.from(
-        JSON.stringify({
-          v: 1,
-          id: this.localId,
-          name: this.name,
-          // Without this every node dials every other node: two clients on the
-          // same LAN would each discover the other and try to connect.
-          role: this.role,
-          tcpPort: this.tcpPort,
-          udpPort: this.udpPort,
-          t: Date.now(),
-        }),
-        'utf8'
-      )
-    );
+    // Sealed PER INTERFACE, because each carries the zone-stripped address it is
+    // sent from. crypto.open authenticates the blob, not the datagram carrying
+    // it, so without this an attacker who simply captures a beacon off ff02::1
+    // — no key needed, all-nodes is joined by every device — can replay it from
+    // their own address and permanently redirect a client. Binding the two
+    // means a replay can only ever claim the address it was minted for.
+    //
+    // The zone cannot travel between machines, but the bare fe80:: part is
+    // identical on both sides, so this is the portion safe to compare.
     for (const nic of this._ifaces) {
+      const blob = crypto.seal(
+        this.key,
+        Buffer.from(
+          JSON.stringify({
+            v: 1,
+            id: this.localId,
+            name: this.name,
+            a: nic.address, // zone-stripped; bound to the source on receipt
+            // Without a role every node dials every other node: two clients on
+            // the same LAN would each discover the other and try to connect.
+            role: this.role,
+            tcpPort: this.tcpPort,
+            udpPort: this.udpPort,
+            t: Date.now(),
+          }),
+          'utf8'
+        )
+      );
       try {
         this._sock.setMulticastInterface(`::%${nic.zone}`);
       } catch {
@@ -175,12 +184,14 @@ class Discovery extends EventEmitter {
       this._warnSkew(pkt.id, pkt.t);
       return;
     }
-    // Bind the beacon to its sender. crypto.open authenticates the BLOB, not the
-    // datagram carrying it, so a captured beacon can be replayed by anyone with
-    // no key at all. The zone cannot travel between machines, but the bare
-    // fe80:: part is identical on both sides — so requiring it to match the
-    // source address makes a replay only able to claim its own address.
-    if (pkt.a && stripZone(pkt.a) !== stripZone(rinfo.address)) return;
+    // Bind the beacon to its sender — REQUIRED, not optional. Accepting a
+    // beacon that merely omits the field would leave the replay path wide open,
+    // which is the whole point of the check.
+    if (typeof pkt.a !== 'string') {
+      this._warnLegacy(pkt.id);
+      return;
+    }
+    if (stripZone(pkt.a).toLowerCase() !== stripZone(rinfo.address).toLowerCase()) return;
 
     // rinfo.address already carries this machine's own zone for the interface
     // the packet arrived on, which is exactly what we need to talk back.
@@ -202,6 +213,19 @@ class Discovery extends EventEmitter {
       first: changed,
       changed,
     });
+  }
+
+  // A beacon from an older build carries no address field. Dropping it is
+  // correct, but doing so silently looks identical to "nobody is there" — so
+  // say why. Rate-limited; only reachable for beacons that already decrypted,
+  // so it cannot be triggered by an outsider.
+  _warnLegacy(id) {
+    const now = Date.now();
+    if (this._lastLegacyWarn && now - this._lastLegacyWarn < 30000) return;
+    this._lastLegacyWarn = now;
+    this.emit('warn',
+      `ignoring beacon from ${id}: no source address field — that peer is running ` +
+      `an older build; update both machines`);
   }
 
   // A clock-skew drop is silent and looks exactly like "nobody is there", so
