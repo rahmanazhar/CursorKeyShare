@@ -59,16 +59,23 @@ class ServerCore extends EventEmitter {
     this.vx = c.x; // virtual cursor in GLOBAL coords (meaningful in remote mode)
     this.vy = c.y;
     this._lastSwitch = 0;
+    this._handlers = null; // set while started; see start()/stop()
   }
 
   start() {
     const b = this.backend;
-    b.on('mousemove', (e) => this._onMove(e));
-    b.on('mousedown', (e) => this._onButton(e, true));
-    b.on('mouseup', (e) => this._onButton(e, false));
-    b.on('wheel', (e) => this._onWheel(e));
-    b.on('keydown', (e) => this._onKey(e, true));
-    b.on('keyup', (e) => this._onKey(e, false));
+    // Keep the bound references so stop() can detach them. The backend is a
+    // process-wide singleton (input.js), so anything left attached accumulates
+    // across engine restarts and every event fires once per past session.
+    this._handlers = {
+      mousemove: (e) => this._onMove(e),
+      mousedown: (e) => this._onButton(e, true),
+      mouseup: (e) => this._onButton(e, false),
+      wheel: (e) => this._onWheel(e),
+      keydown: (e) => this._onKey(e, true),
+      keyup: (e) => this._onKey(e, false),
+    };
+    for (const [ev, fn] of Object.entries(this._handlers)) b.on(ev, fn);
     b.startCapture();
     // Defensive: if a previous run died while controlling a remote, the cursor
     // may still be hidden — starting fresh must always begin visible.
@@ -78,6 +85,12 @@ class ServerCore extends EventEmitter {
 
   stop() {
     this._setCursorVisible(true);
+    if (this._handlers) {
+      for (const [ev, fn] of Object.entries(this._handlers)) {
+        try { this.backend.removeListener(ev, fn); } catch {}
+      }
+      this._handlers = null;
+    }
     try {
       this.backend.setSuppress(false);
       this.backend.stopCapture();
