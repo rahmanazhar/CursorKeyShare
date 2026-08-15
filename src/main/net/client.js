@@ -36,6 +36,8 @@ class NetClient extends EventEmitter {
     this._lastRx = 0; // ms of last inbound TCP traffic (liveness watchdog)
     this._lastMoveSeq = 0;
     this._stopped = false;
+    this._attemptId = 0; // epoch; bumped per connect attempt and on stop so
+                         // callbacks from superseded sockets become no-ops
     this.connected = false;
   }
 
@@ -52,7 +54,9 @@ class NetClient extends EventEmitter {
 
   stop() {
     this._stopped = true;
+    this._attemptId++;
     if (this._reconnectTimer) clearTimeout(this._reconnectTimer);
+    this._reconnectTimer = null;
     if (this._pingTimer) clearInterval(this._pingTimer);
     if (this._sock) try { this._sock.destroy(); } catch {}
     if (this._udp) try { this._udp.close(); } catch {}
@@ -62,6 +66,7 @@ class NetClient extends EventEmitter {
 
   async _connect() {
     if (this._stopped) return;
+    this._attemptId++;
 
     // When pinned to a NIC, connect natively so the socket is interface-scoped
     // BEFORE the SYN goes out — the only reliable way under a full-tunnel VPN.
@@ -95,6 +100,10 @@ class NetClient extends EventEmitter {
     this._lastRx = Date.now(); // liveness baseline — refreshed on every inbound chunk
     this.connected = true;
     this._reader = new FrameReader();
+    // The server's _motionSeq restarts at 0 with each NetServer instance (one
+    // per startEngine), so a stale high-water mark from the previous session
+    // would reject every new datagram and freeze motion permanently.
+    this._lastMoveSeq = 0;
     this.emit('connected', { host: this.host, port: this.tcpPort });
     // Announce ourselves.
     this._sendTcp(
@@ -123,6 +132,7 @@ class NetClient extends EventEmitter {
 
   // Attach data/error/close handlers to a connected socket.
   _wire(sock) {
+    const epoch = this._attemptId;
     sock.on('data', (chunk) => {
       this._lastRx = Date.now(); // any inbound byte = the link is alive
       let blobs;
@@ -146,12 +156,19 @@ class NetClient extends EventEmitter {
 
     sock.on('error', (e) => this.emit('warn', 'socket: ' + e.message));
     sock.on('close', () => {
+      // A socket from a superseded attempt (a cancelled racer, an old session)
+      // must not touch current state or schedule its own reconnect.
+      if (epoch !== this._attemptId) return;
       this.connected = false;
       if (this._pingTimer) clearInterval(this._pingTimer);
+      this._pingTimer = null;
       this.emit('disconnected');
-      if (!this._stopped) {
-        this._reconnectTimer = setTimeout(() => this._connect(), 1500);
-      }
+      if (this._stopped) return;
+      if (this._reconnectTimer) return; // already armed — reconnect is idempotent
+      this._reconnectTimer = setTimeout(() => {
+        this._reconnectTimer = null;
+        this._connect();
+      }, 1500);
     });
   }
 
@@ -241,8 +258,10 @@ class NetClient extends EventEmitter {
 }
 
 // 32-bit wrap-around aware "a is newer than b".
+// NOTE: must be `>>> 0` (unsigned), not `& 0xffffffff` — the latter coerces to
+// a SIGNED int32, making every comparison true and disabling the stale-drop.
 function seqNewer(a, b) {
-  return ((a - b) & 0xffffffff) < 0x80000000 && a !== b;
+  return ((a - b) >>> 0) < 0x80000000 && a !== b;
 }
 
-module.exports = { NetClient };
+module.exports = { NetClient, seqNewer };

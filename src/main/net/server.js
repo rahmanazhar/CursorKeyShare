@@ -75,6 +75,10 @@ class NetServer extends EventEmitter {
         this._sendTcp(p, proto.encodeJson(proto.T.BYE, { reason: 'server-stop' }));
         p.socket.destroy();
       } catch {}
+      // Emit synchronously. peers.clear() below runs before the sockets' async
+      // 'close' fires, at which point the close handler's identity check would
+      // no longer match — so this is the only place the event can come from.
+      if (p.id) this.emit('peer-disconnected', p.id);
     }
     this.peers.clear();
     if (this._reaper) clearInterval(this._reaper);
@@ -139,7 +143,18 @@ class NetServer extends EventEmitter {
   _handle(peer, pkt) {
     switch (pkt.type) {
       case proto.T.HELLO: {
-        peer.id = pkt.id || pkt.localId;
+        const id = pkt.id || pkt.localId;
+        const existing = this.peers.get(id);
+        if (existing && existing !== peer && !existing.socket.destroyed) {
+          // Two machines sharing a localId (cloned config, restored backup,
+          // imaged VM). Silently evicting the first loses its session with no
+          // disconnect event and leaves both sockets open — refuse instead.
+          this.emit('warn', `rejecting client with duplicate id ${id}`);
+          this._sendTcp(peer, proto.encodeJson(proto.T.BYE, { reason: 'duplicate-id' }));
+          peer.socket.destroy();
+          return;
+        }
+        peer.id = id;
         peer.name = pkt.name || peer.ip || 'client';
         if (pkt.udpPort) peer.udpPort = pkt.udpPort;
         // Client reports its combined desktop bounds.

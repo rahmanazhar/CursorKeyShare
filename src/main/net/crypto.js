@@ -34,6 +34,20 @@ function deriveKey(passphrase, salt) {
   );
 }
 
+// Single-entry memo for deriveKey. scrypt at N=2^14 costs ~49ms and blocks the
+// Electron main thread — the same thread native input events marshal onto — so
+// re-deriving on every engine restart is a visible input stall. Credentials
+// rarely change, so one entry is enough.
+let _cache = null; // { passphrase, salt, key }
+
+function deriveKeyCached(passphrase, salt) {
+  const s = String(salt || 'cursorkeyshare');
+  if (_cache && _cache.passphrase === passphrase && _cache.salt === s) return _cache.key;
+  const key = deriveKey(passphrase, s);
+  _cache = { passphrase, salt: s, key };
+  return key;
+}
+
 /**
  * Seal a plaintext buffer. Returns iv|ciphertext|tag.
  * @param {Buffer} key
@@ -71,4 +85,4 @@ function randomId(bytes = 8) {
   return crypto.randomBytes(bytes).toString('hex');
 }
 
-module.exports = { deriveKey, seal, open, randomId, IV_LEN, TAG_LEN, KEY_LEN };
+module.exports = { deriveKey, deriveKeyCached, seal, open, randomId, IV_LEN, TAG_LEN, KEY_LEN };

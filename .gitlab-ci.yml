@@ -12,10 +12,25 @@
 #   APPLE_APP_SPECIFIC_PASSWORD  app-specific password
 #   APPLE_TEAM_ID                10-char Team ID
 
-stages: [build]
+stages: [test, build]
 
 variables:
   GIT_LFS_SKIP_SMUDGE: "1"   # the build doesn't need any LFS-stored source assets
+
+# Tests run on every branch and MR on a cheap Linux runner. The suite does not
+# need the native addon — netbind degrades to no-ops without it — so skip the
+# node-gyp build with --ignore-scripts to keep this job fast.
+test:
+  stage: test
+  image: node:20
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_BRANCH'
+    - if: '$CI_COMMIT_TAG'
+  before_script:
+    - npm ci --ignore-scripts
+  script:
+    - npm test
 
 build:mac:
   stage: build
