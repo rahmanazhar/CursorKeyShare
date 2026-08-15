@@ -266,10 +266,17 @@ function startDiscovery(key) {
     // it is the escape hatch for peers on another subnet, where link-local
     // cannot reach.
     if (state.cfg.role !== 'client' || !state.client) return;
-    if (state.cfg.serverHost) return;
-    // Retarget when we are not connected, or when the peer's address actually
-    // moved. Gating on first-sighting alone would strand us on a dead address.
-    if (state.client.connected && state.client.host === p.address) return;
+    // A configured serverHost is the STARTING point and the cross-subnet
+    // fallback — not a veto. Treating it as an override disabled discovery for
+    // every existing user, who by definition has one set, which is precisely
+    // the population that needs the link-local path.
+    //
+    // While a session is up we leave it alone; a working link is not worth
+    // interrupting. But once it drops — which is exactly what a full-tunnel VPN
+    // causes on the IPv4 path — a discovered link-local address is strictly
+    // better than retrying an address the VPN is swallowing.
+    if (state.client.connected) return;
+    if (state.client.host === p.address) return;
     // The ports arrive inside a sealed beacon, but "authenticated" is not
     // "valid": net.createConnection throws ERR_SOCKET_BAD_PORT synchronously
     // for a bad port, and _connect() is async — so it would reject unhandled.
