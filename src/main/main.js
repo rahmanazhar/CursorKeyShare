@@ -110,7 +110,9 @@ function localBounds() {
 function deriveKey(cfg) {
   const pass = configMod.getPassphrase(cfg);
   if (!pass) return null;
-  return crypto.deriveKey(pass, cfg.group);
+  // Cached: startEngine() runs on every config change and (in Phase 2) on every
+  // network change, and an uncached scrypt blocks the main thread for ~49ms.
+  return crypto.deriveKeyCached(pass, cfg.group);
 }
 
 function registerLocalNode() {
