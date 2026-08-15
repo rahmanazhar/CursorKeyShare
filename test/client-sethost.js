@@ -12,7 +12,10 @@ const { NetClient } = require('../src/main/net/client');
 let fails = 0;
 const ck = (n, c, d) => { console.log((c ? 'PASS ' : 'FAIL ') + n + (c ? '' : '  -> ' + d)); if (!c) fails++; };
 
-function waitFor(cond, ms = 8000, step = 40) {
+// Generous timeouts on purpose: this file runs straight after transport6.js,
+// which opens three full sessions, so connect latency here is load-sensitive.
+// A tight bound makes the test flaky without making it more meaningful.
+function waitFor(cond, ms = 20000, step = 40) {
   return new Promise((res, rej) => {
     const t0 = Date.now();
     const iv = setInterval(() => {
@@ -56,7 +59,7 @@ function waitFor(cond, ms = 8000, step = 40) {
     const changed = client.setHost('::1');
     ck('setHost reports a change', changed === true);
 
-    await waitFor(() => client.connected && s2.peers.size === 1, 8000);
+    await waitFor(() => client.connected && s2.peers.size === 1, 20000);
     ck('connected to the second server', welcomes.includes('srv2'), welcomes.join(','));
     ck('client.host reflects the new target', client.host === '::1', client.host);
 
