@@ -62,6 +62,24 @@ const ck = (n, c, d) => { console.log((c ? 'PASS ' : 'FAIL ') + n + (c ? '' : ' 
     ck('client reconnects after drop', true, '');
     await waitFor(() => server.peers.size === 1, 3000);
     ck('server re-registers the peer', server.peers.size === 1);
+
+    // 4) Motion still flows after a reconnect. The server's _motionSeq restarts
+    //    at 0 for a new NetServer; if the client kept its old high-water mark
+    //    the (now working) stale-drop would reject everything forever.
+    client._lastMoveSeq = 50000; // simulate a long previous session
+    client.stop();
+    client.start();
+    await waitFor(() => client.connected, 6000);
+    ck('lastMoveSeq reset on reconnect', client._lastMoveSeq === 0,
+       'lastMoveSeq=' + client._lastMoveSeq);
+
+    const moved = [];
+    client.on('mousemove', (m) => moved.push(m));
+    await waitFor(() => server.peers.size === 1, 3000);
+    const p2 = [...server.peers.values()][0];
+    server.sendMouseMove(p2.id, 111, 222);
+    await waitFor(() => moved.length > 0, 3000);
+    ck('motion delivered after reconnect', moved.length > 0, 'moved=' + moved.length);
   } catch (e) {
     ck('no timeout', false, e.message);
   } finally {

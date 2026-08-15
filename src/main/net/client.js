@@ -95,6 +95,10 @@ class NetClient extends EventEmitter {
     this._lastRx = Date.now(); // liveness baseline — refreshed on every inbound chunk
     this.connected = true;
     this._reader = new FrameReader();
+    // The server's _motionSeq restarts at 0 with each NetServer instance (one
+    // per startEngine), so a stale high-water mark from the previous session
+    // would reject every new datagram and freeze motion permanently.
+    this._lastMoveSeq = 0;
     this.emit('connected', { host: this.host, port: this.tcpPort });
     // Announce ourselves.
     this._sendTcp(
@@ -241,8 +245,10 @@ class NetClient extends EventEmitter {
 }
 
 // 32-bit wrap-around aware "a is newer than b".
+// NOTE: must be `>>> 0` (unsigned), not `& 0xffffffff` — the latter coerces to
+// a SIGNED int32, making every comparison true and disabling the stale-drop.
 function seqNewer(a, b) {
-  return ((a - b) & 0xffffffff) < 0x80000000 && a !== b;
+  return ((a - b) >>> 0) < 0x80000000 && a !== b;
 }
 
-module.exports = { NetClient };
+module.exports = { NetClient, seqNewer };
